@@ -13,4 +13,34 @@
 # minutes to create and to delete. Factor that into your apply/destroy timings
 # for Task B2.
 
-# TODO: implement the two resources above.
+resource "aws_sagemaker_domain" "this" {
+  domain_name = "${var.project}-${var.environment}-domain"
+  auth_mode   = "IAM"
+  vpc_id      = var.vpc_id
+  subnet_ids  = var.subnet_ids
+
+  default_user_settings {
+    execution_role = var.execution_role_arn
+  }
+
+  retention_policy {
+    home_efs_file_system = "Delete"
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-domain"
+  }
+}
+
+resource "aws_sagemaker_user_profile" "this" {
+  domain_id         = aws_sagemaker_domain.this.id
+  user_profile_name = "${var.project}-${var.environment}-user"
+
+  user_settings {
+    execution_role = var.execution_role_arn
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-user"
+  }
+}

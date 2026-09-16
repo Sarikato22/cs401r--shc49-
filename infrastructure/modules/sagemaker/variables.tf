@@ -19,9 +19,17 @@ variable "subnet_ids" {
   description = "Subnets the SageMaker Domain may use"
   type        = list(string)
 }
+variable "security_group_ids" {
+  description = "Security groups to associate with the SageMaker Domain"
+  type        = list(string)
+}
 
 variable "instance_type" {
   description = "Default instance type for SageMaker Studio applications"
   type        = string
   default     = "ml.t3.medium"
+}
+variable "execution_role_arn" {
+  description = "ARN of the IAM role used by SageMaker"
+  type        = string
 }
