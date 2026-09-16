@@ -19,3 +19,9 @@ variable "subnet_ids" {
   description = "Subnets the SageMaker Domain may use"
   type        = list(string)
 }
+
+variable "instance_type" {
+  description = "Default instance type for SageMaker Studio applications"
+  type        = string
+  default     = "ml.t3.medium"
+}
