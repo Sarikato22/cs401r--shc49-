@@ -34,8 +34,8 @@ variable "availability_zone" {
   default     = "us-east-1a"
 }
 
-variable "instance_type" {
-  description = "Default instance type for SageMaker Studio applications"
+variable "sagemaker_instance_type" {
+  description = "Default kernel instance type for SageMaker Studio apps"
   type        = string
   default     = "ml.t3.medium"
 }

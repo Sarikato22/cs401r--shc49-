@@ -1,8 +1,13 @@
-# Surface what later labs need. Lab 2 reads these from `terraform output`.
+# Uncomment once the matching module outputs exist. Mirrors environments/dev.
 
 # output "vpc_id" {
 #   description = "ID of the VPC"
 #   value       = module.vpc.vpc_id
+# }
+
+# output "public_subnet_id" {
+#   description = "ID of the public subnet"
+#   value       = module.vpc.public_subnet_id
 # }
 
 # output "s3_bucket_name" {
