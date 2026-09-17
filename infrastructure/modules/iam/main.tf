@@ -40,8 +40,8 @@ resource "aws_iam_policy" "ml_engineer" {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "sagemaker:CreateTrainingJob"
         ]
         Resource = "*"
       }
