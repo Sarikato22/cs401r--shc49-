@@ -1,5 +1,5 @@
 == NorthStar Lab 1 — LocalStack validation ==
-date: 2026-09-16T23:04:26Z
+date: 2026-09-17T20:54:47Z
 
 == terraform init ==
 Initializing the backend...
@@ -21,19 +21,100 @@ rerun this command to reinitialize your working directory. If you forget, other
 commands will detect it and remind you to do so if necessary.
 
 == terraform apply ==
+module.iam.data.aws_iam_policy_document.assume_role: Reading...
+module.storage.data.aws_caller_identity.current: Reading...
+module.vpc.aws_vpc.this: Refreshing state... [id=vpc-4c286457b45fd6019]
+module.iam.aws_iam_policy.ml_engineer: Refreshing state... [id=arn:aws:iam::000000000000:policy/northstar-local-MLEngineer-policy]
+module.iam.data.aws_iam_policy_document.assume_role: Read complete after 0s [id=1147345228]
+module.iam.aws_iam_role.ml_engineer: Refreshing state... [id=northstar-local-MLEngineer]
+module.storage.data.aws_caller_identity.current: Read complete after 0s [id=000000000000]
+module.storage.aws_s3_bucket.data: Refreshing state... [id=northstar-local-data-000000000000]
+module.storage.aws_s3_bucket_public_access_block.this: Refreshing state... [id=northstar-local-data-000000000000]
+module.storage.aws_s3_bucket_server_side_encryption_configuration.this: Refreshing state... [id=northstar-local-data-000000000000]
+module.storage.aws_s3_object.prefixes["features/"]: Refreshing state... [id=features/]
+module.storage.aws_s3_bucket_versioning.this: Refreshing state... [id=northstar-local-data-000000000000]
+module.storage.aws_s3_object.prefixes["raw/"]: Refreshing state... [id=raw/]
+module.storage.aws_s3_object.prefixes["artifacts/"]: Refreshing state... [id=artifacts/]
+module.storage.aws_s3_object.prefixes["processed/"]: Refreshing state... [id=processed/]
+module.iam.aws_iam_role_policy_attachment.ml_engineer: Refreshing state... [id=northstar-local-MLEngineer-20260917205331601200000001]
+module.vpc.aws_internet_gateway.this: Refreshing state... [id=igw-095a87caf7a2bf50b]
+module.vpc.aws_subnet.public: Refreshing state... [id=subnet-2d4c40a62120f0491]
+module.vpc.aws_security_group.this: Refreshing state... [id=sg-7f2a7bf02d4dc6882]
+module.vpc.aws_route_table.public: Refreshing state... [id=rtb-2989ae2c79b547059]
+module.vpc.aws_route_table_association.public: Refreshing state... [id=rtbassoc-3fd9b12c0575dc645]
 
-Error: Reference to undeclared resource
+No changes. Your infrastructure matches the configuration.
 
-  on ..\..\modules\storage\outputs.tf line 3, in output "bucket_name":
-   3:   value       = aws_s3_bucket.data.id
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
 
-A managed resource "aws_s3_bucket" "data" has not been declared in
-module.storage.
+Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
 
-Error: Reference to undeclared resource
+== awslocal sts get-caller-identity ==
+{
+    "UserId": "AKIAIOSFODNN7EXAMPLE",
+    "Account": "000000000000",
+    "Arn": "arn:aws:iam::000000000000:root"
+}
 
-  on ..\..\modules\storage\outputs.tf line 8, in output "bucket_arn":
-   8:   value       = aws_s3_bucket.data.arn
+== awslocal s3 ls s3://northstar-local-data-000000000000/ --recursive ==
+2026-09-17 14:53:31          0 artifacts/
+2026-09-17 14:53:31          0 features/
+2026-09-17 14:53:31          0 processed/
+2026-09-17 14:53:31          0 raw/
 
-A managed resource "aws_s3_bucket" "data" has not been declared in
-module.storage.
+== awslocal iam list-roles (northstar*) ==
+[
+    "northstar-local-MLEngineer"
+]
+
+== awslocal ec2 describe-vpcs ==
+[
+    {
+        "Id": "vpc-f0ac9d2438803e3f1",
+        "CIDR": "172.31.0.0/16"
+    },
+    {
+        "Id": "vpc-4c286457b45fd6019",
+        "CIDR": "10.0.0.0/16"
+    }
+]
+
+== awslocal ec2 describe-subnets ==
+[
+    {
+        "Id": "subnet-1443435654d3d0017",
+        "AZ": "us-east-1a",
+        "CIDR": "172.31.0.0/20"
+    },
+    {
+        "Id": "subnet-2d4c40a62120f0491",
+        "AZ": "us-east-1a",
+        "CIDR": "10.0.100.0/24"
+    },
+    {
+        "Id": "subnet-550a04d70d90bf10c",
+        "AZ": "us-east-1b",
+        "CIDR": "172.31.16.0/20"
+    },
+    {
+        "Id": "subnet-efe50a10284ee8c35",
+        "AZ": "us-east-1c",
+        "CIDR": "172.31.32.0/20"
+    },
+    {
+        "Id": "subnet-a8f382a8f01d40c52",
+        "AZ": "us-east-1d",
+        "CIDR": "172.31.48.0/20"
+    },
+    {
+        "Id": "subnet-c30031cd593ebb0f1",
+        "AZ": "us-east-1e",
+        "CIDR": "172.31.64.0/20"
+    },
+    {
+        "Id": "subnet-55adecb3e737787c1",
+        "AZ": "us-east-1f",
+        "CIDR": "172.31.80.0/20"
+    }
+]

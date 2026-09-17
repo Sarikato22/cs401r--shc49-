@@ -14,8 +14,14 @@
 # directories; an empty object with a trailing slash is how a prefix is made
 # to exist before anything is written to it.
 
+data "aws_caller_identity" "current" {}
+
+locals {
+  bucket_name = "${var.project}-${var.environment}-data-${data.aws_caller_identity.current.account_id}"
+}
+
 resource "aws_s3_bucket" "data" {
-  bucket = "${var.project}-${var.environment}-data"
+  bucket = local.bucket_name
 
   tags = {
     Name = "${var.project}-${var.environment}-data"

@@ -1,0 +1,8 @@
+{
+    "files.autoSave": "onWindowChange",
+    "terminal.integrated.agentHostProfile.windows": "",
+
+    "window.restoreWindows": "all",
+    "workbench.editor.restoreViewState": true,
+    "files.hotExit": "onExit"
+}
