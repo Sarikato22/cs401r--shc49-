@@ -4,23 +4,18 @@
 ========================================
 
 ── Part A: AWS Environment (50 pts total in rubric) ─────────────────────
-  ✓ A2 VPC exists: vpc-0e49060466b07ce7a
-  ✓ A2 Public subnet exists: subnet-03a589b98e89496b8
+  ✗ A2 VPC exists — VPC NOT FOUND
+  ✗ A2 Public subnet exists — NOT FOUND
   ✓ A2 No private subnets (correct for Lab 1)
-{
-    "BucketArn": "arn:aws:s3:::northstar-dev-data-716528268494",
-    "BucketRegion": "us-east-1",
-    "AccessPointAlias": false
-}
-  ✓ A3 S3 bucket exists: northstar-dev-data-716528268494
-  ✓ A3 S3 prefix exists: raw/
-  ✓ A3 S3 prefix exists: processed/
-  ✓ A3 S3 prefix exists: features/
-  ✓ A3 S3 prefix exists: artifacts/
-  ✓ A3 IAM role exists: northstar-dev-MLEngineer
-  ✓ A3 IAM sim: MLEngineer can CreateTrainingJob
-  ✓ A3 IAM sim: MLEngineer DENIED write to raw/
-  ✓ A4 SageMaker Domain InService: d-ky1qqluudg3i
+  ✗ A3 S3 bucket exists — BUCKET NOT FOUND
+  ✗ A3 S3 prefix exists: raw/ — PREFIX MISSING
+  ✗ A3 S3 prefix exists: processed/ — PREFIX MISSING
+  ✗ A3 S3 prefix exists: features/ — PREFIX MISSING
+  ✗ A3 S3 prefix exists: artifacts/ — PREFIX MISSING
+  ✗ A3 IAM role exists: northstar-dev-MLEngineer — ROLE NOT FOUND
+  ✗ A3 IAM sim: MLEngineer can CreateTrainingJob — GOT: ERROR
+  ✗ A3 IAM sim: MLEngineer DENIED write to raw/ — GOT: ERROR (expected deny)
+  ✗ A4 SageMaker Domain InService — STATUS: MISSING
 
 ── Part B: Terraform IaC (Lab 1b) ──────────────────────────────────────
   ✓ B1 Module exists: vpc/
