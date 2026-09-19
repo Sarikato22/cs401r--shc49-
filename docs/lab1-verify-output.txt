@@ -4,18 +4,18 @@
 ========================================
 
 ── Part A: AWS Environment (35 pts total in rubric) ─────────────────────
-  ✗ A2 VPC exists — VPC NOT FOUND
-  ✗ A2 Public subnet exists — NOT FOUND
+  ✓ A2 VPC exists: vpc-064cac49cc7a5dc88
+  ✓ A2 Public subnet exists: subnet-0e81fd7e9a11712ff
   ✓ A2 No private subnets (correct for Lab 1)
-  ✗ A3 S3 bucket exists — BUCKET NOT FOUND
-  ✗ A3 S3 prefix exists: raw/ — PREFIX MISSING
-  ✗ A3 S3 prefix exists: processed/ — PREFIX MISSING
-  ✗ A3 S3 prefix exists: features/ — PREFIX MISSING
-  ✗ A3 S3 prefix exists: artifacts/ — PREFIX MISSING
-  ✗ A3 IAM role exists: northstar-dev-MLEngineer — ROLE NOT FOUND
-  ✗ A3 IAM sim: MLEngineer can CreateTrainingJob — GOT: ERROR
-  ✗ A3 IAM sim: MLEngineer DENIED write to raw/ — GOT: ERROR (expected deny)
-  ✗ A4 SageMaker Domain InService — STATUS: MISSING
+  ✓ A3 S3 bucket exists: northstar-dev-data-716528268494
+  ✓ A3 S3 prefix exists: raw/
+  ✓ A3 S3 prefix exists: processed/
+  ✓ A3 S3 prefix exists: features/
+  ✓ A3 S3 prefix exists: artifacts/
+  ✓ A3 IAM role exists: northstar-dev-MLEngineer
+  ✓ A3 IAM sim: MLEngineer can CreateTrainingJob
+  ✓ A3 IAM sim: MLEngineer DENIED write to raw/
+  ✓ A4 SageMaker Domain InService: d-eih2rh4gzfwz
 
 ── Part B: Terraform IaC (Lab 1b) ──────────────────────────────────────
   ✓ B1 Module exists: vpc/
@@ -39,8 +39,6 @@
   ✓ S Cost estimate document submitted
 
 ========================================
- Results: 18 passed  11 failed
+ Results: 29 passed  0 failed
 ========================================
-
-Fix the failing checks above and re-run: bash scripts/verify-lab1.sh
 
