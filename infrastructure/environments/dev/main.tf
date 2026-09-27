@@ -5,12 +5,14 @@
 # Uncomment each block as you implement the module it calls.
 
 module "vpc" {
-  source             = "../../modules/vpc"
-  project            = var.project
-  environment        = var.environment
-  vpc_cidr           = var.vpc_cidr
-  public_subnet_cidr = var.public_subnet_cidr
-  availability_zone  = var.availability_zone
+  source              = "../../modules/vpc"
+  project             = var.project
+  environment         = var.environment
+  vpc_cidr            = var.vpc_cidr
+  public_subnet_cidr  = var.public_subnet_cidr
+  availability_zone   = var.availability_zone
+  private_subnet_cidr = var.private_subnet_cidr
+  enable_nat_gateway  = true
 }
 
 module "storage" {
@@ -35,3 +37,4 @@ module "sagemaker" {
   execution_role_arn = module.iam.ml_engineer_role_arn
   instance_type      = var.sagemaker_instance_type
 }
+
