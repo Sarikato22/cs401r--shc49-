@@ -19,6 +19,8 @@ resource "aws_sagemaker_domain" "this" {
   vpc_id      = var.vpc_id
   subnet_ids  = var.subnet_ids
 
+  app_network_access_type = "VpcOnly"
+
   default_user_settings {
     execution_role = var.execution_role_arn
   }
