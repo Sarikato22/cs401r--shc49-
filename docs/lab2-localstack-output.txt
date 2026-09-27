@@ -1,0 +1,140 @@
+== NorthStar — LocalStack validation ==
+date: 2026-09-27T01:53:09Z
+
+== terraform init ==
+Initializing the backend...
+
+Initializing modules...
+
+Initializing provider plugins...
+- Reusing previous version of hashicorp/aws from the dependency lock file
+- Using previously-installed hashicorp/aws v5.100.0
+
+Terraform has been successfully initialized!
+
+You may now begin working with Terraform. Try running "terraform plan" to see
+any changes that are required for your infrastructure. All Terraform commands
+should now work.
+
+If you ever set or change modules or backend configuration for Terraform,
+rerun this command to reinitialize your working directory. If you forget, other
+commands will detect it and remind you to do so if necessary.
+
+== terraform apply ==
+module.storage.data.aws_caller_identity.current: Reading...
+module.vpc.aws_vpc.this: Refreshing state... [id=vpc-b03bd27edaaa44d4d]
+module.iam.data.aws_iam_policy_document.model_monitor_assume_role: Reading...
+module.iam.data.aws_caller_identity.current: Reading...
+module.iam.data.aws_iam_policy_document.data_engineer_assume_role: Reading...
+module.iam.aws_iam_policy.ml_engineer: Refreshing state... [id=arn:aws:iam::000000000000:policy/northstar-local-MLEngineer-policy]
+module.iam.data.aws_iam_policy_document.assume_role: Reading...
+module.iam.data.aws_iam_policy_document.data_engineer_assume_role: Read complete after 0s [id=786546706]
+module.iam.data.aws_iam_policy_document.model_monitor_assume_role: Read complete after 0s [id=1147345228]
+module.iam.data.aws_iam_policy_document.assume_role: Read complete after 0s [id=1147345228]
+module.iam.aws_iam_role.model_monitor: Refreshing state... [id=northstar-local-ModelMonitor]
+module.iam.aws_iam_role.ml_engineer: Refreshing state... [id=northstar-local-MLEngineer]
+module.iam.aws_iam_role.data_engineer: Refreshing state... [id=northstar-local-DataEngineer]
+module.storage.data.aws_caller_identity.current: Read complete after 0s [id=000000000000]
+module.iam.data.aws_caller_identity.current: Read complete after 0s [id=000000000000]
+module.iam.aws_iam_policy.data_engineer: Refreshing state... [id=arn:aws:iam::000000000000:policy/northstar-local-DataEngineer-policy]
+module.iam.aws_iam_policy.model_monitor: Refreshing state... [id=arn:aws:iam::000000000000:policy/northstar-local-ModelMonitor-policy]
+module.storage.aws_s3_bucket.data: Refreshing state... [id=northstar-local-data-000000000000]
+module.iam.aws_iam_role_policy_attachment.data_engineer: Refreshing state... [id=northstar-local-DataEngineer-20260927015222985600000002]
+module.iam.aws_iam_role_policy_attachment.ml_engineer: Refreshing state... [id=northstar-local-MLEngineer-20260927015222985100000001]
+module.storage.aws_s3_bucket_versioning.this: Refreshing state... [id=northstar-local-data-000000000000]
+module.storage.aws_s3_bucket_server_side_encryption_configuration.this: Refreshing state... [id=northstar-local-data-000000000000]
+module.storage.aws_s3_bucket_public_access_block.this: Refreshing state... [id=northstar-local-data-000000000000]
+module.storage.aws_s3_object.prefixes["raw/"]: Refreshing state... [id=raw/]
+module.storage.aws_s3_object.prefixes["processed/"]: Refreshing state... [id=processed/]
+module.storage.aws_s3_object.prefixes["artifacts/"]: Refreshing state... [id=artifacts/]
+module.storage.aws_s3_object.prefixes["features/"]: Refreshing state... [id=features/]
+module.iam.aws_iam_role_policy_attachment.model_monitor: Refreshing state... [id=northstar-local-ModelMonitor-20260927015222989800000003]
+module.vpc.aws_internet_gateway.this: Refreshing state... [id=igw-8192a612b5ce19396]
+module.vpc.aws_subnet.private: Refreshing state... [id=subnet-dbd7976935d62f9e0]
+module.vpc.aws_subnet.public: Refreshing state... [id=subnet-3b518dcd18996822b]
+module.vpc.aws_security_group.this: Refreshing state... [id=sg-20ecb6a993fd5c440]
+module.vpc.aws_route_table.public: Refreshing state... [id=rtb-e60ec43afe2f283da]
+module.vpc.aws_route_table_association.public: Refreshing state... [id=rtbassoc-10768626ec1ea3e9d]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+
+Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+
+== awslocal sts get-caller-identity ==
+{
+    "UserId": "AKIAIOSFODNN7EXAMPLE",
+    "Account": "000000000000",
+    "Arn": "arn:aws:iam::000000000000:root"
+}
+
+== awslocal s3 ls s3:/// --recursive  (name from: terraform output s3_bucket_name) ==
+2026-09-26 19:52:22 northstar-local-data-000000000000
+
+== awslocal iam list-roles (northstar*) ==
+[
+    "northstar-local-DataEngineer",
+    "northstar-local-ModelMonitor",
+    "northstar-local-MLEngineer"
+]
+
+== awslocal ec2 describe-vpcs ==
+[
+    {
+        "Id": "vpc-b68f9fa588990eda2",
+        "CIDR": "172.31.0.0/16"
+    },
+    {
+        "Id": "vpc-b03bd27edaaa44d4d",
+        "CIDR": "10.0.0.0/16"
+    }
+]
+
+== awslocal ec2 describe-subnets ==
+[
+    {
+        "Id": "subnet-70959417ec01ac513",
+        "AZ": "us-east-1a",
+        "CIDR": "172.31.0.0/20"
+    },
+    {
+        "Id": "subnet-3b518dcd18996822b",
+        "AZ": "us-east-1a",
+        "CIDR": "10.0.100.0/24"
+    },
+    {
+        "Id": "subnet-dbd7976935d62f9e0",
+        "AZ": "us-east-1a",
+        "CIDR": "10.0.1.0/24"
+    },
+    {
+        "Id": "subnet-0bd1c84bc429a1d4c",
+        "AZ": "us-east-1b",
+        "CIDR": "172.31.16.0/20"
+    },
+    {
+        "Id": "subnet-7192dc744deba0d95",
+        "AZ": "us-east-1c",
+        "CIDR": "172.31.32.0/20"
+    },
+    {
+        "Id": "subnet-3774178c2a6d42a5a",
+        "AZ": "us-east-1d",
+        "CIDR": "172.31.48.0/20"
+    },
+    {
+        "Id": "subnet-5df627304dc6f8e10",
+        "AZ": "us-east-1e",
+        "CIDR": "172.31.64.0/20"
+    },
+    {
+        "Id": "subnet-c78c90b57693bf281",
+        "AZ": "us-east-1f",
+        "CIDR": "172.31.80.0/20"
+    }
+]
+
+== awslocal ec2 describe-nat-gateways (expected: none, NAT disabled locally) ==
+[]
