@@ -39,3 +39,20 @@ module "sagemaker" {
   instance_type      = var.sagemaker_instance_type
 }
 
+module "feature_store" {
+  source                 = "../../modules/feature_store"
+  project                = var.project
+  environment            = var.environment
+  bucket_name            = module.storage.bucket_name
+  data_engineer_role_arn = module.iam.data_engineer_role_arn
+}
+module "glue" {
+  source                       = "../../modules/glue"
+  project                      = var.project
+  environment                  = var.environment
+  bucket_name                  = module.storage.bucket_name
+  data_engineer_role_arn       = module.iam.data_engineer_role_arn
+  feature_group_name           = module.feature_store.feature_group_name
+  feature_engineer_script_path = "${path.root}/../../../glue-scripts/feature_engineer.py"
+  aws_region                   = var.aws_region
+}

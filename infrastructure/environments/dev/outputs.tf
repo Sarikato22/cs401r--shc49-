@@ -26,3 +26,19 @@ output "sagemaker_domain_id" {
   description = "ID of the SageMaker Domain"
   value       = module.sagemaker.domain_id
 }
+
+output "data_engineer_role_arn" {
+  value = module.iam.data_engineer_role_arn
+}
+
+output "feature_group_name" {
+  value = module.feature_store.feature_group_name
+}
+
+output "feature_group_arn" {
+  value = module.feature_store.feature_group_arn
+}
+
+output "feature_engineer_job_name" {
+  value = module.glue.feature_engineer_job_name
+}
