@@ -134,6 +134,20 @@ resource "aws_iam_policy" "data_engineer" {
       {
         Effect = "Allow"
         Action = [
+          "s3:PutObjectAcl"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}/features/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetBucketAcl"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "s3:ListBucket"
         ]
         Resource = "arn:aws:s3:::${local.data_bucket_name}"

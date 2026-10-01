@@ -1,0 +1,2108 @@
+========================================
+ Lab 2 / Task 3 Terraform Inspection
+========================================
+
+
+========================================
+ FILE: infrastructure/modules/vpc/main.tf
+========================================
+resource "aws_vpc" "this" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.project}-${var.environment}-vpc"
+  }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.public_subnet_cidr
+  availability_zone       = var.availability_zone
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project}-${var.environment}-public-subnet"
+  }
+}
+
+resource "aws_subnet" "private" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.private_subnet_cidr
+  availability_zone       = var.availability_zone
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "${var.project}-${var.environment}-private-subnet"
+  }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.project}-${var.environment}-igw"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_eip" "nat" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project}-${var.environment}-nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "this" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  allocation_id = aws_eip.nat[0].id
+  subnet_id     = aws_subnet.public.id
+
+  tags = {
+    Name = "${var.project}-${var.environment}-nat"
+  }
+
+  depends_on = [aws_internet_gateway.this]
+}
+
+resource "aws_route_table" "private" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this[0].id
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-private-rt"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.private[0].id
+}
+
+resource "aws_security_group" "this" {
+  name        = "${var.project}-${var.environment}-sg"
+  description = "Security group for ${var.project}-${var.environment}"
+  vpc_id      = aws_vpc.this.id
+
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-sg"
+  }
+}
+
+========================================
+ FILE: infrastructure/modules/vpc/variables.tf
+========================================
+# Every variable needs a description — Task B1 grades this.
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidr" {
+  description = "CIDR block for the public subnet"
+  type        = string
+  default     = "10.0.100.0/24"
+}
+
+variable "private_subnet_cidr" {
+  description = "CIDR block for the private subnet"
+  type        = string
+  default     = "10.0.1.0/24"
+}
+
+variable "availability_zone" {
+  description = "Availability Zone for the public and private subnets"
+  type        = string
+  default     = "us-east-1a"
+}
+
+variable "enable_nat_gateway" {
+  description = "Whether to create the NAT Gateway and private route table"
+  type        = bool
+  default     = true
+}
+
+#testing
+========================================
+ FILE: infrastructure/modules/vpc/outputs.tf
+========================================
+# Downstream modules and environments/dev/main.tf consume these.
+# Uncomment and wire up as you implement each resource.
+
+output "vpc_id" {
+  description = "ID of the VPC"
+  value       = aws_vpc.this.id
+}
+
+output "public_subnet_id" {
+  description = "ID of the public subnet"
+  value       = aws_subnet.public.id
+}
+
+output "security_group_id" {
+  description = "ID of the default security group"
+  value       = aws_security_group.this.id
+}
+output "private_subnet_id" {
+  description = "ID of the private subnet"
+  value       = aws_subnet.private.id
+}
+
+========================================
+ FILE: infrastructure/modules/storage/main.tf
+========================================
+# ── modules/storage ──────────────────────────────────────────────────────────
+# Required resources (Task B1). Only these belong in this module:
+#
+#   aws_s3_bucket
+#   aws_s3_bucket_public_access_block
+#   aws_s3_bucket_versioning
+#   aws_s3_bucket_server_side_encryption_configuration
+#   aws_s3_object  x4                 the raw/ processed/ features/ artifacts/ prefixes
+#
+# ONE bucket with four prefixes, not four buckets. Later labs derive the name
+# as ${project}-${environment}-data-${account_id}, so keep that shape.
+#
+# The four aws_s3_object resources create the prefixes. S3 has no real
+# directories; an empty object with a trailing slash is how a prefix is made
+# to exist before anything is written to it.
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  bucket_name = "${var.project}-${var.environment}-data-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket" "data" {
+  bucket = local.bucket_name
+
+  tags = {
+    Name = "${var.project}-${var.environment}-data"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "this" {
+  bucket = aws_s3_bucket.data.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "this" {
+  bucket = aws_s3_bucket.data.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_object" "prefixes" {
+  for_each = toset(var.prefixes)
+
+  bucket = aws_s3_bucket.data.id
+  key    = each.value
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "this" {
+  count  = var.enable_lifecycle_rules ? 1 : 0
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "expire-raw-data"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw/"
+    }
+
+    expiration {
+      days = 90
+    }
+  }
+
+  rule {
+    id     = "expire-raw-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
+  rule {
+    id     = "expire-processed-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "processed/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
+  rule {
+    id     = "expire-feature-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "features/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 60
+    }
+  }
+
+  rule {
+    id     = "expire-datacapture"
+    status = "Enabled"
+
+    filter {
+      prefix = "datacapture/"
+    }
+
+    expiration {
+      days = 7
+    }
+  }
+}
+
+========================================
+ FILE: infrastructure/modules/storage/variables.tf
+========================================
+# Every variable needs a description — Task B1 grades this.
+
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+variable "prefixes" {
+  description = "Top-level S3 prefixes to create in the data bucket"
+  type        = list(string)
+  default     = ["raw/", "processed/", "features/", "artifacts/"]
+}
+variable "enable_lifecycle_rules" {
+  description = "Whether to create the S3 bucket lifecycle rules"
+  type        = bool
+  default     = true
+}
+
+========================================
+ FILE: infrastructure/modules/storage/outputs.tf
+========================================
+output "bucket_name" {
+  description = "Name of the data bucket"
+  value       = aws_s3_bucket.data.id
+}
+
+output "bucket_arn" {
+  description = "ARN of the data bucket"
+  value       = aws_s3_bucket.data.arn
+}
+
+========================================
+ FILE: infrastructure/modules/iam/main.tf
+========================================
+# ── modules/iam ──────────────────────────────────────────────────────────────
+# Required resources (Task B1). Exactly one of each:
+#
+#   aws_iam_role                     MLEngineer, trusted by sagemaker.amazonaws.com
+#   aws_iam_policy
+#   aws_iam_role_policy_attachment
+#
+# Least privilege is graded in later labs, so start narrow: grant only the S3
+# prefixes and SageMaker actions this role actually needs. A wildcard policy
+# here will cost you points in Lab 2.
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  data_bucket_name = "${var.project}-${var.environment}-data-${data.aws_caller_identity.current.account_id}"
+}
+
+#MLEngineer 
+
+data "aws_iam_policy_document" "assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["sagemaker.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "ml_engineer" {
+  name               = "${var.project}-${var.environment}-MLEngineer"
+  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+
+  tags = {
+    Name = "${var.project}-${var.environment}-MLEngineer"
+  }
+}
+
+resource "aws_iam_policy" "ml_engineer" {
+  name = "${var.project}-${var.environment}-MLEngineer-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "sagemaker:CreateTrainingJob"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ml_engineer" {
+  role       = aws_iam_role.ml_engineer.name
+  policy_arn = aws_iam_policy.ml_engineer.arn
+}
+
+# Data Engineer
+
+data "aws_iam_policy_document" "data_engineer_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type = "Service"
+      identifiers = [
+        "glue.amazonaws.com",
+        "lambda.amazonaws.com",
+        "sagemaker.amazonaws.com"
+      ]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "data_engineer" {
+  name               = "${var.project}-${var.environment}-DataEngineer"
+  assume_role_policy = data.aws_iam_policy_document.data_engineer_assume_role.json
+
+  tags = {
+    Name = "${var.project}-${var.environment}-DataEngineer"
+  }
+}
+
+resource "aws_iam_policy" "data_engineer" {
+  name = "${var.project}-${var.environment}-DataEngineer-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:*"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DeleteNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeVpcs",
+          "ec2:CreateTags",
+          "ec2:DeleteTags"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = [
+          "arn:aws:s3:::${local.data_bucket_name}/raw/*",
+          "arn:aws:s3:::${local.data_bucket_name}/processed/*",
+          "arn:aws:s3:::${local.data_bucket_name}/features/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "raw/*",
+              "processed/*",
+              "features/*"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}/artifacts/glue/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "artifacts/glue/*"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sagemaker:PutRecord",
+          "sagemaker:CreateFeatureGroup",
+          "sagemaker:DescribeFeatureGroup"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "data_engineer" {
+  role       = aws_iam_role.data_engineer.name
+  policy_arn = aws_iam_policy.data_engineer.arn
+}
+
+# Model Monitor
+
+data "aws_iam_policy_document" "model_monitor_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["sagemaker.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "model_monitor" {
+  name               = "${var.project}-${var.environment}-ModelMonitor"
+  assume_role_policy = data.aws_iam_policy_document.model_monitor_assume_role.json
+
+  tags = {
+    Name = "${var.project}-${var.environment}-ModelMonitor"
+  }
+}
+
+resource "aws_iam_policy" "model_monitor" {
+  name = "${var.project}-${var.environment}-ModelMonitor-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData",
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DescribeAlarms"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sagemaker:ListProcessingJobs",
+          "sagemaker:DescribeProcessingJob"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}/artifacts/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "artifacts/*"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "model_monitor" {
+  role       = aws_iam_role.model_monitor.name
+  policy_arn = aws_iam_policy.model_monitor.arn
+}
+
+========================================
+ FILE: infrastructure/modules/iam/variables.tf
+========================================
+# Every variable needs a description — Task B1 grades this.
+
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+========================================
+ FILE: infrastructure/modules/iam/outputs.tf
+========================================
+output "ml_engineer_role_arn" {
+  description = "ARN of the MLEngineer role — later labs pass this to SageMaker"
+  value       = aws_iam_role.ml_engineer.arn
+}
+
+output "data_engineer_role_arn" {
+  description = "ARN of the DataEngineer role"
+  value       = aws_iam_role.data_engineer.arn
+}
+
+output "model_monitor_role_arn" {
+  description = "ARN of the ModelMonitor role"
+  value       = aws_iam_role.model_monitor.arn
+}
+
+========================================
+ FILE: infrastructure/modules/sagemaker/main.tf
+========================================
+# ── modules/sagemaker ────────────────────────────────────────────────────────
+# Required resources (Task B1). Only these belong in this module:
+#
+#   aws_sagemaker_domain
+#   aws_sagemaker_user_profile
+#
+# A brand-new AWS account has no service-linked role for Studio, and the
+# Domain fails to create with a service-linked role error. Fix it once in the
+# console (IAM -> Roles -> Create Role -> AWS Service -> SageMaker -> SageMaker
+# Studio) and re-apply. See the New Account Bootstrap note in the lab.
+#
+# The Domain is also the slowest resource here by a wide margin -- several
+# minutes to create and to delete. Factor that into your apply/destroy timings
+# for Task B2.
+
+resource "aws_sagemaker_domain" "this" {
+  domain_name = "${var.project}-${var.environment}-domain"
+  auth_mode   = "IAM"
+  vpc_id      = var.vpc_id
+  subnet_ids  = var.subnet_ids
+
+  app_network_access_type = "VpcOnly"
+
+  default_user_settings {
+    execution_role = var.execution_role_arn
+  }
+
+  retention_policy {
+    home_efs_file_system = "Delete"
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-domain"
+  }
+}
+
+resource "aws_sagemaker_user_profile" "this" {
+  domain_id         = aws_sagemaker_domain.this.id
+  user_profile_name = "${var.project}-${var.environment}-user"
+
+  user_settings {
+    execution_role = var.execution_role_arn
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-user"
+  }
+}
+
+========================================
+ FILE: infrastructure/modules/sagemaker/variables.tf
+========================================
+# Every variable needs a description — Task B1 grades this.
+
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+variable "vpc_id" {
+  description = "VPC the SageMaker Domain attaches to"
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "Subnets the SageMaker Domain may use"
+  type        = list(string)
+}
+variable "security_group_ids" {
+  description = "Security groups to associate with the SageMaker Domain"
+  type        = list(string)
+}
+
+variable "instance_type" {
+  description = "Default instance type for SageMaker Studio applications"
+  type        = string
+  default     = "ml.t3.medium"
+}
+variable "execution_role_arn" {
+  description = "ARN of the IAM role used by SageMaker"
+  type        = string
+}
+========================================
+ FILE: infrastructure/modules/sagemaker/outputs.tf
+========================================
+output "domain_id" {
+  description = "ID of the SageMaker Domain"
+  value       = aws_sagemaker_domain.this.id
+}
+
+========================================
+ FILE: infrastructure/environments/dev/main.tf
+========================================
+# ── environments/dev ─────────────────────────────────────────────────────────
+# Wire the four modules together here. Each module call passes var.project and
+# var.environment down; nothing in modules/ hardcodes a name.
+#
+# Uncomment each block as you implement the module it calls.
+
+module "vpc" {
+  source              = "../../modules/vpc"
+  project             = var.project
+  environment         = var.environment
+  vpc_cidr            = var.vpc_cidr
+  public_subnet_cidr  = var.public_subnet_cidr
+  availability_zone   = var.availability_zone
+  private_subnet_cidr = var.private_subnet_cidr
+  enable_nat_gateway  = true
+}
+
+module "storage" {
+  source                 = "../../modules/storage"
+  project                = var.project
+  environment            = var.environment
+  enable_lifecycle_rules = true
+}
+
+module "iam" {
+  source      = "../../modules/iam"
+  project     = var.project
+  environment = var.environment
+}
+
+module "sagemaker" {
+  source             = "../../modules/sagemaker"
+  project            = var.project
+  environment        = var.environment
+  vpc_id             = module.vpc.vpc_id
+  subnet_ids         = [module.vpc.private_subnet_id]
+  security_group_ids = [module.vpc.security_group_id]
+  execution_role_arn = module.iam.ml_engineer_role_arn
+  instance_type      = var.sagemaker_instance_type
+}
+
+
+========================================
+ FILE: infrastructure/environments/dev/variables.tf
+========================================
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+  default     = "northstar"
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+  default     = "dev"
+}
+
+variable "aws_region" {
+  description = "AWS region for all resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidr" {
+  description = "CIDR block for the public subnet"
+  type        = string
+  default     = "10.0.100.0/24"
+}
+
+variable "availability_zone" {
+  description = "Availability Zone for the public subnet"
+  type        = string
+  default     = "us-east-1a"
+}
+
+variable "sagemaker_instance_type" {
+  description = "Default kernel instance type for SageMaker Studio apps"
+  type        = string
+  default     = "ml.t3.medium"
+}
+
+variable "private_subnet_cidr" {
+  description = "CIDR block for the private subnet"
+  type        = string
+  default     = "10.0.1.0/24"
+}
+========================================
+ FILE: infrastructure/environments/dev/outputs.tf
+========================================
+# Surface what later labs need. Lab 2 reads these from `terraform output`,
+# and scripts/verify-lab1.sh reads ALL FIVE of them with `terraform output
+# -raw`, so every one must exist (uncommented and wired) before you run it.
+
+output "vpc_id" {
+  description = "ID of the VPC"
+  value       = module.vpc.vpc_id
+}
+
+output "public_subnet_id" {
+  description = "ID of the public subnet"
+  value       = module.vpc.public_subnet_id
+}
+
+output "s3_bucket_name" {
+  description = "Name of the data bucket"
+  value       = module.storage.bucket_name
+}
+
+output "ml_engineer_role_arn" {
+  description = "ARN of the MLEngineer role"
+  value       = module.iam.ml_engineer_role_arn
+}
+
+output "sagemaker_domain_id" {
+  description = "ID of the SageMaker Domain"
+  value       = module.sagemaker.domain_id
+}
+
+========================================
+ FILE: infrastructure/environments/dev/versions.tf
+========================================
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = var.project
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
+}
+
+========================================
+ FILE: infrastructure/environments/local/main.tf
+========================================
+# ── environments/local ───────────────────────────────────────────────────────
+# Calls the same modules as environments/dev. The sagemaker module is omitted
+# on purpose: SageMaker is not in LocalStack Community.
+#
+# These calls are live, not commented out, so `make local-validate` works the
+# moment your vpc, storage, and iam modules are implemented. Until then,
+# terraform validate still passes — an empty module is a valid module.
+
+module "vpc" {
+  source              = "../../modules/vpc"
+  project             = var.project
+  environment         = var.environment
+  enable_nat_gateway  = false
+}
+
+module "storage" {
+  source                 = "../../modules/storage"
+  project                = var.project
+  environment            = var.environment
+  enable_lifecycle_rules = false
+}
+
+module "iam" {
+  source      = "../../modules/iam"
+  project     = var.project
+  environment = var.environment
+}
+
+========================================
+ FILE: infrastructure/environments/local/variables.tf
+========================================
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+  default     = "northstar"
+}
+
+variable "environment" {
+  description = "Deployment environment — fixed to local so names never collide with dev"
+  type        = string
+  default     = "local"
+}
+
+variable "aws_region" {
+  description = "Region LocalStack emulates; must match awslocal's default"
+  type        = string
+  default     = "us-east-1"
+}
+
+========================================
+ FILE: infrastructure/environments/local/outputs.tf
+========================================
+# Uncomment once the matching module outputs exist. Mirrors environments/dev.
+
+# output "vpc_id" {
+#   description = "ID of the VPC"
+#   value       = module.vpc.vpc_id
+# }
+
+# output "public_subnet_id" {
+#   description = "ID of the public subnet"
+#   value       = module.vpc.public_subnet_id
+# }
+
+# output "s3_bucket_name" {
+#   description = "Name of the data bucket"
+#   value       = module.storage.bucket_name
+# }
+
+# output "ml_engineer_role_arn" {
+#   description = "ARN of the MLEngineer role"
+#   value       = module.iam.ml_engineer_role_arn
+# }
+
+========================================
+ FILE: infrastructure/environments/local/versions.tf
+========================================
+# ── environments/local ───────────────────────────────────────────────────────
+# Same modules as environments/dev, pointed at LocalStack instead of AWS.
+# Nothing here costs money. Used only by Task B5 (make local-validate).
+#
+# Do not add a backend block: local state is fine for a throwaway emulator.
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  # LocalStack accepts any credentials; these keep the provider from reading
+  # your real ~/.aws profile.
+  access_key = "test"
+  secret_key = "test"
+
+  # Skip the calls that only make sense against real AWS.
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+  skip_region_validation      = true
+  s3_use_path_style           = true
+
+  endpoints {
+    ec2 = "http://localhost:4566"
+    iam = "http://localhost:4566"
+    s3  = "http://localhost:4566"
+    sts = "http://localhost:4566"
+  }
+
+  default_tags {
+    tags = {
+      Project     = var.project
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
+}
+
+========================================
+ Terraform Module Directories
+========================================
+
+--- vpc ---
+infrastructure/modules/vpc/main.tf
+infrastructure/modules/vpc/outputs.tf
+infrastructure/modules/vpc/variables.tf
+
+--- storage ---
+infrastructure/modules/storage/main.tf
+infrastructure/modules/storage/outputs.tf
+infrastructure/modules/storage/variables.tf
+
+--- iam ---
+infrastructure/modules/iam/main.tf
+infrastructure/modules/iam/outputs.tf
+infrastructure/modules/iam/variables.tf
+
+--- sagemaker ---
+infrastructure/modules/sagemaker/main.tf
+infrastructure/modules/sagemaker/outputs.tf
+infrastructure/modules/sagemaker/variables.tf
+
+--- glue ---
+[MODULE NOT FOUND]
+
+--- feature_store ---
+[MODULE NOT FOUND]
+
+========================================
+ Glue Scripts
+========================================
+
+========================================
+ FILE: glue-scripts/feature_engineer.py
+========================================
+"""
+Glue ETL: processed/customers/ -> features/customers/ + SageMaker Feature Store
+
+TEMPORAL SPLIT - read this before changing anything
+---------------------------------------------------
+    |<---- observation window ---->|<--- holdout --->|
+                              FEATURE_CUTOFF (T)   SNAPSHOT
+
+  * Every feature is computed ONLY from purchases on or before T.
+  * churn_label is derived ONLY from the holdout: 1 if the customer made
+    no purchase in (T, SNAPSHOT], else 0.
+
+Mixing the two windows is the classic leakage failure. If recency were
+computed over the full range, it would encode the answer directly and the
+model would post a near-perfect AUC that collapses in production.
+
+Note that roughly a third of churners are still buying right up to T. A
+model using recency alone misses them; that is precisely why the rest of the
+feature set exists.
+
+This is also where the grain changes. Input is transaction level (many rows
+per customer); output is customer level (exactly one row per customer). Every
+feature is an aggregate over that customer's purchase history.
+
+Job arguments (wired by Terraform in modules/glue):
+  --input_path         s3:// processed Parquet
+  --output_path        s3:// features destination
+  --feature_group_name SageMaker Feature Group to ingest into
+  --region             AWS region for the Feature Store runtime client
+"""
+
+import sys
+import time
+
+import boto3
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from pyspark.sql import functions as F
+
+TIER_BRONZE_MAX = 500.0
+TIER_SILVER_MAX = 2000.0
+TIER_GOLD_MAX = 5000.0
+
+RISK_HIGH_LO, RISK_HIGH_HI = 0.7, 1.0
+RISK_MED_LO, RISK_MED_HI = 0.4, 0.7
+RISK_LOW_LO, RISK_LOW_HI = 0.0, 0.4
+
+FEATURE_CUTOFF = "2026-04-01"   
+SNAPSHOT = "2026-06-30"       
+
+N_CATEGORIES = 8.0           
+
+
+def split_windows(df):
+    """Split into the observation window (<= T) and the holdout ((T, SNAPSHOT]).
+
+    Return (history, holdout). Use the FEATURE_CUTOFF and SNAPSHOT constants
+    above - do NOT use today() or max(purchase_date).
+
+    Everything downstream depends on this being right. Features come only
+    from history; the label comes only from holdout.
+    """
+    cutoff = F.to_date(F.lit(FEATURE_CUTOFF))
+    snapshot = F.to_date(F.lit(SNAPSHOT))
+
+    df = df.withColumn(
+        "purchase_date",
+        F.to_date("purchase_date")
+    )
+
+    history = df.filter(
+        F.col("purchase_date") <= cutoff
+    )
+
+    holdout = df.filter(
+        (F.col("purchase_date") > cutoff) &
+        (F.col("purchase_date") <= snapshot)
+    )
+
+    return history, holdout
+
+
+def compute_rfm_features(history):
+    """One row per customer_id, every window measured backwards from T.
+
+    Produce these columns:
+      days_since_last_purchase   T minus the customer's last purchase
+      customer_tenure_days       T minus the customer's first purchase
+      purchase_frequency_30d     orders in the 30 days before T
+      purchase_frequency_90d     orders in the 90 days before T
+      purchase_frequency_180d    orders in the 180 days before T
+      avg_order_value            mean order_value across all history
+      total_spend_90d            sum of order_value in the 90 days before T
+      total_lifetime_value       sum of all order_value
+      avg_basket_size_6m         mean num_items per order, last 180 days
+      category_diversity_score   distinct product_category / N_CATEGORIES,
+                                 EXCLUDING 'unknown' - the transform imputes
+                                 that for missing categories, and counting it
+                                 as a real category pushes the score above 1.0
+      online_to_store_ratio      fraction of orders with channel == 'online'
+
+    Useful: F.datediff, F.date_sub, and conditional aggregates built with
+    F.sum(F.when(...).otherwise(0)). Cast everything to double - Feature
+    Store expects Fractional.
+
+    Watch the divide-by-zero in avg_basket_size_6m: a customer with no
+    orders in the last 180 days needs a guarded denominator.
+    """
+    cutoff = F.to_date(F.lit(FEATURE_CUTOFF))
+
+    days_30_start = F.date_sub(cutoff, 30)
+    days_90_start = F.date_sub(cutoff, 90)
+    days_180_start = F.date_sub(cutoff, 180)
+
+    features = history.groupBy("customer_id").agg(
+        F.datediff(
+            cutoff,
+            F.max("purchase_date")
+        ).cast("double").alias("days_since_last_purchase"),
+
+        F.datediff(
+            cutoff,
+            F.min("purchase_date")
+        ).cast("double").alias("customer_tenure_days"),
+
+        F.sum(
+            F.when(
+                F.col("purchase_date") > days_30_start,
+                1
+            ).otherwise(0)
+        ).cast("double").alias("purchase_frequency_30d"),
+
+        F.sum(
+            F.when(
+                F.col("purchase_date") > days_90_start,
+                1
+            ).otherwise(0)
+        ).cast("double").alias("purchase_frequency_90d"),
+
+        F.sum(
+            F.when(
+                F.col("purchase_date") > days_180_start,
+                1
+            ).otherwise(0)
+        ).cast("double").alias("purchase_frequency_180d"),
+
+        F.avg("order_value")
+        .cast("double")
+        .alias("avg_order_value"),
+
+        F.sum(
+            F.when(
+                F.col("purchase_date") > days_90_start,
+                F.col("order_value")
+            ).otherwise(0)
+        ).cast("double").alias("total_spend_90d"),
+
+        F.sum("order_value")
+        .cast("double")
+        .alias("total_lifetime_value"),
+
+        (
+            F.sum(
+                F.when(
+                    F.col("purchase_date") > days_180_start,
+                    F.col("num_items")
+                ).otherwise(0)
+            )
+            /
+            F.when(
+                F.sum(
+                    F.when(
+                        F.col("purchase_date") > days_180_start,
+                        1
+                    ).otherwise(0)
+                ) > 0,
+                F.sum(
+                    F.when(
+                        F.col("purchase_date") > days_180_start,
+                        1
+                    ).otherwise(0)
+                )
+            ).otherwise(F.lit(1))
+        ).cast("double").alias("avg_basket_size_6m"),
+
+        (
+            F.countDistinct(
+                F.when(
+                    F.col("product_category") != "unknown",
+                    F.col("product_category")
+                )
+            ) / F.lit(N_CATEGORIES)
+        ).cast("double").alias("category_diversity_score"),
+
+        (
+            F.sum(
+                F.when(
+                    F.col("channel") == "online",
+                    1
+                ).otherwise(0)
+            ) / F.count("*")
+        ).cast("double").alias("online_to_store_ratio")
+    )
+
+    return features
+
+
+def assign_loyalty_tier(df):
+    """Bucket total_lifetime_value into a loyalty_tier string column.
+
+        Bronze   : < 500
+        Silver   : 500 - 2000
+        Gold     : 2000 - 5000
+        Platinum : >= 5000
+
+    Thresholds are the TIER_* constants. All four tiers must appear in your
+    output; if one is empty, your thresholds or your LTV aggregation is wrong.
+    """
+    return df.withColumn(
+        "loyalty_tier",
+        F.when(
+            F.col("total_lifetime_value") < TIER_BRONZE_MAX,
+            "Bronze"
+        ).when(
+            F.col("total_lifetime_value") < TIER_SILVER_MAX,
+            "Silver"
+        ).when(
+            F.col("total_lifetime_value") < TIER_GOLD_MAX,
+            "Gold"
+        ).otherwise("Platinum")
+    )
+
+
+def compute_churn_proxy(df):
+    """Rule-based churn_risk_score in [0, 1]. This is NOT the label.
+
+        High   (0.7-1.0): days_since_last_purchase > 60 AND
+                          purchase_frequency_30d == 0
+        Medium (0.4-0.7): days_since_last_purchase > 30
+        Low    (0.0-0.4): otherwise
+
+    Scale within each band rather than emitting three constants, and clamp
+    the result to [0, 1].
+
+    This heuristic is deliberately kept as the baseline your Lab 3 model has
+    to beat. A trained model that cannot outperform three lines of rules has
+    not earned its deployment.
+    """
+    days = F.col("days_since_last_purchase")
+    freq30 = F.col("purchase_frequency_30d")
+
+    high_score = (
+        F.lit(RISK_HIGH_LO)
+        + (
+            (days - F.lit(60.0)) / F.lit(60.0)
+        ) * F.lit(RISK_HIGH_HI - RISK_HIGH_LO)
+    )
+
+    medium_score = (
+        F.lit(RISK_MED_LO)
+        + (
+            (days - F.lit(30.0)) / F.lit(30.0)
+        ) * F.lit(RISK_MED_HI - RISK_MED_LO)
+    )
+
+    low_score = (
+        F.lit(RISK_LOW_LO)
+        + (
+            days / F.lit(30.0)
+        ) * F.lit(RISK_LOW_HI - RISK_LOW_LO)
+    )
+
+    score = (
+        F.when(
+            (days > 60) & (freq30 == 0),
+            high_score
+        )
+        .when(
+            days > 30,
+            medium_score
+        )
+        .otherwise(low_score)
+    )
+
+    return df.withColumn(
+        "churn_risk_score",
+        F.greatest(
+            F.lit(0.0),
+            F.least(
+                F.lit(1.0),
+                score
+            )
+        ).cast("double")
+    )
+
+
+def attach_churn_label(features, holdout):
+    """churn_label = 1 if the customer made NO purchase in the holdout window.
+
+    Left-join the distinct customers seen in holdout onto features; anyone
+    absent from holdout churned.
+
+    Do not compute this from any feature. The label must come from the
+    holdout window and nowhere else - that separation is what makes the
+    resulting model honest.
+    """
+    active_customers = (
+        holdout
+        .select("customer_id")
+        .distinct()
+        .withColumn("made_purchase", F.lit(1))
+    )
+
+    return (
+        features
+        .join(
+            active_customers,
+            on="customer_id",
+            how="left"
+        )
+        .withColumn(
+            "churn_label",
+            F.when(
+                F.col("made_purchase").isNull(),
+                1
+            ).otherwise(0).cast("int")
+        )
+        .drop("made_purchase")
+    )
+
+
+def ingest_to_feature_store(rows, feature_group_name, region, event_time):
+    """PutRecord each customer into the online store.
+
+    Runs on the driver against a collected list. That is acceptable here
+    because the output is one row per customer (~2k records) - at production
+    scale this would be a foreachPartition with a client per partition.
+    """
+    client = boto3.client(
+        "sagemaker-featurestore-runtime",
+        region_name=region
+    )
+
+    ingested = 0
+
+    for r in rows:
+        record = [
+            {
+                "FeatureName": "customer_id",
+                "ValueAsString": str(r["customer_id"])
+            },
+            {
+                "FeatureName": "event_time",
+                "ValueAsString": str(event_time)
+            },
+        ] + [
+            {
+                "FeatureName": name,
+                "ValueAsString": str(r[name])
+            }
+            for name in [
+                "days_since_last_purchase",
+                "customer_tenure_days",
+                "purchase_frequency_30d",
+                "purchase_frequency_90d",
+                "purchase_frequency_180d",
+                "avg_order_value",
+                "total_spend_90d",
+                "total_lifetime_value",
+                "avg_basket_size_6m",
+                "category_diversity_score",
+                "online_to_store_ratio",
+                "loyalty_tier",
+                "churn_risk_score",
+                "churn_label",
+            ]
+        ]
+
+        client.put_record(
+            FeatureGroupName=feature_group_name,
+            Record=record
+        )
+
+        ingested += 1
+
+    return ingested
+
+
+def main():
+    args = getResolvedOptions(
+        sys.argv,
+        [
+            "JOB_NAME",
+            "input_path",
+            "output_path",
+            "feature_group_name",
+            "region",
+        ],
+    )
+
+    sc = SparkContext()
+    glue_context = GlueContext(sc)
+    spark = glue_context.spark_session
+    job = Job(glue_context)
+
+    job.init(
+        args["JOB_NAME"],
+        args
+    )
+
+    df = spark.read.parquet(args["input_path"])
+
+    print(
+        f"[features] read {df.count()} processed transaction rows"
+    )
+
+    history, holdout = split_windows(df)
+
+    print(
+        f"[features] observation window (<= {FEATURE_CUTOFF}): "
+        f"{history.count()} rows"
+    )
+
+    print(
+        f"[features] holdout window ({FEATURE_CUTOFF} to {SNAPSHOT}): "
+        f"{holdout.count()} rows"
+    )
+
+    features = compute_rfm_features(history)
+
+    features = assign_loyalty_tier(features)
+
+    features = compute_churn_proxy(features)
+
+    features = attach_churn_label(
+        features,
+        holdout
+    )
+
+    for col in [
+        "avg_order_value",
+        "total_lifetime_value",
+        "total_spend_90d",
+        "avg_basket_size_6m",
+        "category_diversity_score",
+        "online_to_store_ratio",
+    ]:
+        features = features.withColumn(
+            col,
+            F.round(F.col(col), 4)
+        )
+
+    n_customers = features.count()
+
+    print(
+        f"[features] computed features for {n_customers} customers"
+    )
+    for col in [
+        "days_since_last_purchase",
+        "customer_tenure_days",
+        "purchase_frequency_30d",
+        "purchase_frequency_90d",
+        "purchase_frequency_180d",
+        "avg_order_value",
+        "total_spend_90d",
+        "total_lifetime_value",
+        "avg_basket_size_6m",
+        "category_diversity_score",
+        "online_to_store_ratio",
+        "loyalty_tier",
+        "churn_risk_score",
+        "churn_label",
+    ]:
+        nulls = features.filter(
+            F.col(col).isNull()
+        ).count()
+
+        assert nulls == 0, (
+            f"{col} has {nulls} null values"
+        )
+
+    out_of_range = features.filter(
+        (F.col("churn_risk_score") < 0) |
+        (F.col("churn_risk_score") > 1)
+    ).count()
+
+    assert out_of_range == 0, (
+        f"churn_risk_score out of [0,1] for {out_of_range} rows"
+    )
+
+    churn_rate = (
+        features
+        .agg(F.avg("churn_label"))
+        .collect()[0][0]
+    )
+
+    print(
+        f"[features] churn_label rate: {churn_rate:.1%}"
+    )
+
+    assert 0.05 < churn_rate < 0.50, \
+        f"churn rate {churn_rate:.1%} is implausible - check the window split"
+
+    tiers = {
+        r["loyalty_tier"]
+        for r in (
+            features
+            .select("loyalty_tier")
+            .distinct()
+            .collect()
+        )
+    }
+
+    print(
+        f"[features] tier distribution present: {sorted(tiers)}"
+    )
+
+    assert tiers == {
+        "Bronze",
+        "Silver",
+        "Gold",
+        "Platinum",
+    }, (
+        f"tier distribution is degenerate: {sorted(tiers)}"
+    )
+
+    event_time = float(int(time.time()))
+
+    features = features.withColumn(
+        "event_time",
+        F.lit(event_time)
+    )
+
+    (
+        features
+        .coalesce(2)
+        .write
+        .mode("overwrite")
+        .parquet(args["output_path"])
+    )
+
+    print(
+        f"[features] wrote {n_customers} rows to "
+        f"{args['output_path']}"
+    )
+
+    rows = [
+        r.asDict()
+        for r in features.collect()
+    ]
+
+    ingested = ingest_to_feature_store(
+        rows,
+        args["feature_group_name"],
+        args["region"],
+        event_time
+    )
+
+    print(
+        f"[features] ingested {ingested} records into "
+        f"{args['feature_group_name']} at event_time {event_time}"
+    )
+
+    job.commit()
+
+
+if __name__ == "__main__":
+    main()
+========================================
+ FILE: glue-scripts/transform.py
+========================================
+"""
+Glue ETL: raw/customers/ -> processed/customers/
+
+Reads the crawler-registered catalog table, enforces types, imputes nulls,
+removes duplicate transactions, and writes Parquet to the processed zone.
+
+Grain note: this job is transaction-level in and transaction-level out. One
+row per purchase, many rows per customer. The feature engineering job is
+what collapses to one row per customer. Deduplicating on customer_id here
+would destroy the purchase history that RFM features are computed from.
+
+Job arguments (wired by Terraform in modules/glue):
+  --database_name  Glue catalog database
+  --table_name     catalog table produced by the crawler
+  --output_path    s3:// destination for Parquet output
+"""
+
+import sys
+
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+# Target types for the processed zone. The crawler infers everything from CSV
+# as string, so every one of these is an explicit cast, not a no-op.
+SCHEMA = {
+    "transaction_id": "string",
+    "customer_id": "string",
+    "purchase_date": "date",
+    "order_value": "double",
+    "num_items": "int",
+    "payment_method": "string",
+    "channel": "string",
+    "store_id": "string",
+    "product_category": "string",
+}
+
+NUMERIC_COLS = ["order_value", "num_items"]
+STRING_COLS = ["payment_method", "channel", "store_id", "product_category"]
+
+
+def cast_types(df):
+    """Cast every column to its SCHEMA type. Drop rows with no customer_id.
+
+    Three things to handle, in this order:
+
+    1. TRIM whitespace on every column first. A customer_id of
+       "  CUST-10000001 " is not null, but it will not group or join
+       correctly either, and the bug is invisible until your feature
+       counts come out slightly wrong.
+    2. Convert empty strings to real nulls. CSV gives you "" where you
+       want None; Spark treats those as different things.
+    3. Parse purchase_date. Most rows are ISO 8601 (yyyy-MM-dd) but a few
+       percent are MM/dd/yyyy. F.to_date returns null on a format
+       mismatch instead of raising, so parse both formats and coalesce.
+       If you only parse the ISO form you will silently null out the
+       other rows and then drop them.
+
+    Finally, drop rows where customer_id is null. That column is the join
+    key for every downstream feature, so a row without it cannot be
+    attributed to anyone.
+    """
+    for column in df.columns:
+        df = df.withColumn(
+            column,
+            F.nullif(F.trim(F.col(column)), "")
+        )
+
+    for column, data_type in SCHEMA.items():
+        if column == "purchase_date":
+            df = df.withColumn(
+                column,
+                F.coalesce(
+                    F.to_date(F.col(column), "yyyy-MM-dd"),
+                    F.to_date(F.col(column), "MM/dd/yyyy")
+                )
+            )
+        else:
+            df = df.withColumn(
+                column,
+                F.col(column).cast(data_type)
+            )
+
+    return df.filter(F.col("customer_id").isNotNull())
+
+
+def impute_nulls(df):
+    """Numeric columns -> column median. String columns -> 'unknown'.
+
+    Use the MEDIAN, not the mean. order_value is right-skewed: a handful
+    of large orders drags a mean-imputed value well above the typical
+    order and quietly inflates every monetary feature you compute later.
+
+    DataFrame.approxQuantile(col, [0.5], 0.0) gives you an exact median.
+    Remember num_items is an integer column - round before you fill it.
+
+    Numeric columns: NUMERIC_COLS.  String columns: STRING_COLS.
+    """
+    for column in NUMERIC_COLS:
+        median = df.approxQuantile(column, [0.5], 0.0)[0]
+
+        if column == "num_items":
+            median = int(round(median))
+
+        df = df.fillna({column: median})
+
+    df = df.fillna(
+        {column: "unknown" for column in STRING_COLS}
+    )
+
+    return df
+
+def deduplicate(df):
+    """Keep one row per transaction_id.
+
+    Deduplicate on transaction_id, NOT on customer_id. A customer is
+    expected to have many transactions - that purchase history is exactly
+    what the feature engineering job aggregates over in Task 3.
+    Collapsing to one row per customer here makes total_lifetime_value
+    and purchase_frequency_30d impossible to compute, and you will not
+    discover it until Task 3 fails.
+
+    Duplicates are ingestion artifacts: the same transaction landing twice
+    from a retry. Break ties deterministically (for example by
+    purchase_date descending, then order_value descending) so repeated
+    runs produce the same output rather than depending on partition order.
+
+    A window function with row_number() over a partition by transaction_id
+    is the idiomatic approach.
+    """
+    window = Window.partitionBy("transaction_id").orderBy(
+        F.col("purchase_date").desc(),
+        F.col("order_value").desc(),
+    )
+
+    return (
+        df.withColumn("_row_number", F.row_number().over(window))
+          .filter(F.col("_row_number") == 1)
+          .drop("_row_number")
+    )
+
+
+def main():
+    args = getResolvedOptions(
+        sys.argv, ["JOB_NAME", "database_name", "table_name", "output_path"]
+    )
+
+    sc = SparkContext()
+    glue_context = GlueContext(sc)
+    spark = glue_context.spark_session
+    job = Job(glue_context)
+    job.init(args["JOB_NAME"], args)
+
+    dyf = glue_context.create_dynamic_frame.from_catalog(
+        database=args["database_name"],
+        table_name=args["table_name"],
+    )
+    df = dyf.toDF()
+    raw_count = df.count()
+    print(f"[transform] read {raw_count} raw rows from "
+          f"{args['database_name']}.{args['table_name']}")
+
+    df = cast_types(df)
+    after_cast = df.count()
+    print(f"[transform] after cast_types: {after_cast} rows "
+          f"({raw_count - after_cast} dropped for null customer_id)")
+
+    df = impute_nulls(df)
+    print(f"[transform] after impute_nulls: {df.count()} rows")
+
+    df = deduplicate(df)
+    final_count = df.count()
+    print(f"[transform] after deduplicate: {final_count} rows "
+          f"({after_cast - final_count} duplicate transactions removed)")
+
+    # Fail loudly rather than writing a bad dataset the feature job will
+    # silently consume. These are the same guarantees the data contract
+    # published for processed/customers/, enforced at the producer.
+    assert df.filter(F.col("customer_id").isNull()).count() == 0, \
+        "null customer_id survived the transform"
+    assert df.select("transaction_id").distinct().count() == final_count, \
+        "duplicate transaction_id survived the transform"
+    assert df.filter(F.col("purchase_date").isNull()).count() == 0, \
+        "unparseable purchase_date survived the transform"
+
+    (df.coalesce(4)
+       .write
+       .mode("overwrite")
+       .parquet(args["output_path"]))
+    print(f"[transform] wrote {final_count} rows to {args['output_path']}")
+
+    job.commit()
+
+
+if __name__ == "__main__":
+    main()
+
+========================================
+ DEV MODULE REFERENCES
+========================================
+7:module "vpc" {
+18:module "storage" {
+25:module "iam" {
+31:module "sagemaker" {
+
+========================================
+ TERRAFORM RESOURCES
+========================================
+infrastructure/modules/iam/main.tf:33:resource "aws_iam_role" "ml_engineer" {
+infrastructure/modules/iam/main.tf:42:resource "aws_iam_policy" "ml_engineer" {
+infrastructure/modules/iam/main.tf:61:resource "aws_iam_role_policy_attachment" "ml_engineer" {
+infrastructure/modules/iam/main.tf:85:resource "aws_iam_role" "data_engineer" {
+infrastructure/modules/iam/main.tf:94:resource "aws_iam_policy" "data_engineer" {
+infrastructure/modules/iam/main.tf:195:resource "aws_iam_role_policy_attachment" "data_engineer" {
+infrastructure/modules/iam/main.tf:215:resource "aws_iam_role" "model_monitor" {
+infrastructure/modules/iam/main.tf:224:resource "aws_iam_policy" "model_monitor" {
+infrastructure/modules/iam/main.tf:283:resource "aws_iam_role_policy_attachment" "model_monitor" {
+infrastructure/modules/sagemaker/main.tf:16:resource "aws_sagemaker_domain" "this" {
+infrastructure/modules/sagemaker/main.tf:37:resource "aws_sagemaker_user_profile" "this" {
+infrastructure/modules/storage/main.tf:23:resource "aws_s3_bucket" "data" {
+infrastructure/modules/storage/main.tf:31:resource "aws_s3_bucket_public_access_block" "this" {
+infrastructure/modules/storage/main.tf:40:resource "aws_s3_bucket_versioning" "this" {
+infrastructure/modules/storage/main.tf:48:resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
+infrastructure/modules/storage/main.tf:58:resource "aws_s3_object" "prefixes" {
+infrastructure/modules/storage/main.tf:65:resource "aws_s3_bucket_lifecycle_configuration" "this" {
+infrastructure/modules/vpc/main.tf:1:resource "aws_vpc" "this" {
+infrastructure/modules/vpc/main.tf:11:resource "aws_subnet" "public" {
+infrastructure/modules/vpc/main.tf:22:resource "aws_subnet" "private" {
+infrastructure/modules/vpc/main.tf:33:resource "aws_internet_gateway" "this" {
+infrastructure/modules/vpc/main.tf:41:resource "aws_route_table" "public" {
+infrastructure/modules/vpc/main.tf:54:resource "aws_route_table_association" "public" {
+infrastructure/modules/vpc/main.tf:59:resource "aws_eip" "nat" {
+infrastructure/modules/vpc/main.tf:69:resource "aws_nat_gateway" "this" {
+infrastructure/modules/vpc/main.tf:82:resource "aws_route_table" "private" {
+infrastructure/modules/vpc/main.tf:97:resource "aws_route_table_association" "private" {
+infrastructure/modules/vpc/main.tf:104:resource "aws_security_group" "this" {
+
+========================================
+ TERRAFORM OUTPUTS
+========================================
+infrastructure/environments/dev/outputs.tf:5:output "vpc_id" {
+infrastructure/environments/dev/outputs.tf:10:output "public_subnet_id" {
+infrastructure/environments/dev/outputs.tf:15:output "s3_bucket_name" {
+infrastructure/environments/dev/outputs.tf:20:output "ml_engineer_role_arn" {
+infrastructure/environments/dev/outputs.tf:25:output "sagemaker_domain_id" {
+infrastructure/modules/iam/outputs.tf:1:output "ml_engineer_role_arn" {
+infrastructure/modules/iam/outputs.tf:6:output "data_engineer_role_arn" {
+infrastructure/modules/iam/outputs.tf:11:output "model_monitor_role_arn" {
+infrastructure/modules/sagemaker/outputs.tf:1:output "domain_id" {
+infrastructure/modules/storage/outputs.tf:1:output "bucket_name" {
+infrastructure/modules/storage/outputs.tf:6:output "bucket_arn" {
+infrastructure/modules/vpc/outputs.tf:4:output "vpc_id" {
+infrastructure/modules/vpc/outputs.tf:9:output "public_subnet_id" {
+infrastructure/modules/vpc/outputs.tf:14:output "security_group_id" {
+infrastructure/modules/vpc/outputs.tf:18:output "private_subnet_id" {
+
+========================================
+ TERRAFORM VARIABLES
+========================================
+infrastructure/environments/dev/variables.tf:1:variable "project" {
+infrastructure/environments/dev/variables.tf:7:variable "environment" {
+infrastructure/environments/dev/variables.tf:13:variable "aws_region" {
+infrastructure/environments/dev/variables.tf:19:variable "vpc_cidr" {
+infrastructure/environments/dev/variables.tf:25:variable "public_subnet_cidr" {
+infrastructure/environments/dev/variables.tf:31:variable "availability_zone" {
+infrastructure/environments/dev/variables.tf:37:variable "sagemaker_instance_type" {
+infrastructure/environments/dev/variables.tf:43:variable "private_subnet_cidr" {
+infrastructure/environments/local/variables.tf:1:variable "project" {
+infrastructure/environments/local/variables.tf:7:variable "environment" {
+infrastructure/environments/local/variables.tf:13:variable "aws_region" {
+infrastructure/modules/iam/variables.tf:3:variable "project" {
+infrastructure/modules/iam/variables.tf:8:variable "environment" {
+infrastructure/modules/sagemaker/variables.tf:3:variable "project" {
+infrastructure/modules/sagemaker/variables.tf:8:variable "environment" {
+infrastructure/modules/sagemaker/variables.tf:13:variable "vpc_id" {
+infrastructure/modules/sagemaker/variables.tf:18:variable "subnet_ids" {
+infrastructure/modules/sagemaker/variables.tf:22:variable "security_group_ids" {
+infrastructure/modules/sagemaker/variables.tf:27:variable "instance_type" {
+infrastructure/modules/sagemaker/variables.tf:32:variable "execution_role_arn" {
+infrastructure/modules/storage/variables.tf:3:variable "project" {
+infrastructure/modules/storage/variables.tf:8:variable "environment" {
+infrastructure/modules/storage/variables.tf:13:variable "prefixes" {
+infrastructure/modules/storage/variables.tf:18:variable "enable_lifecycle_rules" {
+infrastructure/modules/vpc/variables.tf:2:variable "project" {
+infrastructure/modules/vpc/variables.tf:7:variable "environment" {
+infrastructure/modules/vpc/variables.tf:12:variable "vpc_cidr" {
+infrastructure/modules/vpc/variables.tf:18:variable "public_subnet_cidr" {
+infrastructure/modules/vpc/variables.tf:24:variable "private_subnet_cidr" {
+infrastructure/modules/vpc/variables.tf:30:variable "availability_zone" {
+infrastructure/modules/vpc/variables.tf:36:variable "enable_nat_gateway" {
+
+========================================
+ S3 REFERENCES
+========================================
+infrastructure/modules/iam/main.tf:129:          "arn:aws:s3:::${local.data_bucket_name}/raw/*",
+infrastructure/modules/iam/main.tf:130:          "arn:aws:s3:::${local.data_bucket_name}/processed/*",
+infrastructure/modules/iam/main.tf:131:          "arn:aws:s3:::${local.data_bucket_name}/features/*"
+infrastructure/modules/iam/main.tf:144:              "raw/*",
+infrastructure/modules/iam/main.tf:145:              "processed/*",
+infrastructure/modules/iam/main.tf:146:              "features/*"
+infrastructure/modules/iam/main.tf:156:        Resource = "arn:aws:s3:::${local.data_bucket_name}/artifacts/glue/*"
+infrastructure/modules/iam/main.tf:168:              "artifacts/glue/*"
+infrastructure/modules/iam/main.tf:253:        Resource = "arn:aws:s3:::${local.data_bucket_name}/artifacts/*"
+infrastructure/modules/iam/main.tf:265:              "artifacts/*"
+infrastructure/modules/storage/main.tf:4:#   aws_s3_bucket
+infrastructure/modules/storage/main.tf:5:#   aws_s3_bucket_public_access_block
+infrastructure/modules/storage/main.tf:6:#   aws_s3_bucket_versioning
+infrastructure/modules/storage/main.tf:7:#   aws_s3_bucket_server_side_encryption_configuration
+infrastructure/modules/storage/main.tf:8:#   aws_s3_object  x4                 the raw/ processed/ features/ artifacts/ prefixes
+infrastructure/modules/storage/main.tf:13:# The four aws_s3_object resources create the prefixes. S3 has no real
+infrastructure/modules/storage/main.tf:23:resource "aws_s3_bucket" "data" {
+infrastructure/modules/storage/main.tf:31:resource "aws_s3_bucket_public_access_block" "this" {
+infrastructure/modules/storage/main.tf:32:  bucket = aws_s3_bucket.data.id
+infrastructure/modules/storage/main.tf:40:resource "aws_s3_bucket_versioning" "this" {
+infrastructure/modules/storage/main.tf:41:  bucket = aws_s3_bucket.data.id
+infrastructure/modules/storage/main.tf:48:resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
+infrastructure/modules/storage/main.tf:49:  bucket = aws_s3_bucket.data.id
+infrastructure/modules/storage/main.tf:58:resource "aws_s3_object" "prefixes" {
+infrastructure/modules/storage/main.tf:61:  bucket = aws_s3_bucket.data.id
+infrastructure/modules/storage/main.tf:65:resource "aws_s3_bucket_lifecycle_configuration" "this" {
+infrastructure/modules/storage/main.tf:67:  bucket = aws_s3_bucket.data.id
+infrastructure/modules/storage/main.tf:74:      prefix = "raw/"
+infrastructure/modules/storage/main.tf:87:      prefix = "raw/"
+infrastructure/modules/storage/main.tf:100:      prefix = "processed/"
+infrastructure/modules/storage/main.tf:113:      prefix = "features/"
+infrastructure/modules/storage/outputs.tf:3:  value       = aws_s3_bucket.data.id
+infrastructure/modules/storage/outputs.tf:8:  value       = aws_s3_bucket.data.arn
+infrastructure/modules/storage/variables.tf:16:  default     = ["raw/", "processed/", "features/", "artifacts/"]
+
+========================================
+ DATAENGINEER IAM
+========================================
+infrastructure/modules/iam/main.tf:53:          "sagemaker:CreateTrainingJob"
+infrastructure/modules/iam/main.tf:86:  name               = "${var.project}-${var.environment}-DataEngineer"
+infrastructure/modules/iam/main.tf:90:    Name = "${var.project}-${var.environment}-DataEngineer"
+infrastructure/modules/iam/main.tf:95:  name = "${var.project}-${var.environment}-DataEngineer-policy"
+infrastructure/modules/iam/main.tf:103:          "glue:*"
+infrastructure/modules/iam/main.tf:110:          "ec2:CreateNetworkInterface",
+infrastructure/modules/iam/main.tf:111:          "ec2:DeleteNetworkInterface",
+infrastructure/modules/iam/main.tf:116:          "ec2:CreateTags",
+infrastructure/modules/iam/main.tf:117:          "ec2:DeleteTags"
+infrastructure/modules/iam/main.tf:176:          "sagemaker:PutRecord",
+infrastructure/modules/iam/main.tf:177:          "sagemaker:CreateFeatureGroup",
+infrastructure/modules/iam/main.tf:178:          "sagemaker:DescribeFeatureGroup"
+infrastructure/modules/iam/main.tf:243:          "sagemaker:ListProcessingJobs",
+infrastructure/modules/iam/main.tf:244:          "sagemaker:DescribeProcessingJob"
+infrastructure/modules/iam/outputs.tf:7:  description = "ARN of the DataEngineer role"
+
+========================================
+ VPC REFERENCES
+========================================
+infrastructure/modules/vpc/main.tf:11:resource "aws_subnet" "public" {
+infrastructure/modules/vpc/main.tf:13:  cidr_block              = var.public_subnet_cidr
+infrastructure/modules/vpc/main.tf:15:  map_public_ip_on_launch = true
+infrastructure/modules/vpc/main.tf:18:    Name = "${var.project}-${var.environment}-public-subnet"
+infrastructure/modules/vpc/main.tf:22:resource "aws_subnet" "private" {
+infrastructure/modules/vpc/main.tf:24:  cidr_block              = var.private_subnet_cidr
+infrastructure/modules/vpc/main.tf:26:  map_public_ip_on_launch = false
+infrastructure/modules/vpc/main.tf:29:    Name = "${var.project}-${var.environment}-private-subnet"
+infrastructure/modules/vpc/main.tf:41:resource "aws_route_table" "public" {
+infrastructure/modules/vpc/main.tf:50:    Name = "${var.project}-${var.environment}-public-rt"
+infrastructure/modules/vpc/main.tf:54:resource "aws_route_table_association" "public" {
+infrastructure/modules/vpc/main.tf:55:  subnet_id      = aws_subnet.public.id
+infrastructure/modules/vpc/main.tf:56:  route_table_id = aws_route_table.public.id
+infrastructure/modules/vpc/main.tf:60:  count = var.enable_nat_gateway ? 1 : 0
+infrastructure/modules/vpc/main.tf:69:resource "aws_nat_gateway" "this" {
+infrastructure/modules/vpc/main.tf:70:  count = var.enable_nat_gateway ? 1 : 0
+infrastructure/modules/vpc/main.tf:73:  subnet_id     = aws_subnet.public.id
+infrastructure/modules/vpc/main.tf:82:resource "aws_route_table" "private" {
+infrastructure/modules/vpc/main.tf:83:  count = var.enable_nat_gateway ? 1 : 0
+infrastructure/modules/vpc/main.tf:89:    nat_gateway_id = aws_nat_gateway.this[0].id
+infrastructure/modules/vpc/main.tf:93:    Name = "${var.project}-${var.environment}-private-rt"
+infrastructure/modules/vpc/main.tf:97:resource "aws_route_table_association" "private" {
+infrastructure/modules/vpc/main.tf:98:  count = var.enable_nat_gateway ? 1 : 0
+infrastructure/modules/vpc/main.tf:100:  subnet_id      = aws_subnet.private.id
+infrastructure/modules/vpc/main.tf:101:  route_table_id = aws_route_table.private[0].id
+infrastructure/modules/vpc/main.tf:104:resource "aws_security_group" "this" {
+infrastructure/modules/vpc/outputs.tf:9:output "public_subnet_id" {
+infrastructure/modules/vpc/outputs.tf:10:  description = "ID of the public subnet"
+infrastructure/modules/vpc/outputs.tf:11:  value       = aws_subnet.public.id
+infrastructure/modules/vpc/outputs.tf:14:output "security_group_id" {
+infrastructure/modules/vpc/outputs.tf:16:  value       = aws_security_group.this.id
+infrastructure/modules/vpc/outputs.tf:18:output "private_subnet_id" {
+infrastructure/modules/vpc/outputs.tf:19:  description = "ID of the private subnet"
+infrastructure/modules/vpc/outputs.tf:20:  value       = aws_subnet.private.id
+infrastructure/modules/vpc/variables.tf:18:variable "public_subnet_cidr" {
+infrastructure/modules/vpc/variables.tf:19:  description = "CIDR block for the public subnet"
+infrastructure/modules/vpc/variables.tf:24:variable "private_subnet_cidr" {
+infrastructure/modules/vpc/variables.tf:25:  description = "CIDR block for the private subnet"
+infrastructure/modules/vpc/variables.tf:31:  description = "Availability Zone for the public and private subnets"
+infrastructure/modules/vpc/variables.tf:36:variable "enable_nat_gateway" {
+infrastructure/modules/vpc/variables.tf:37:  description = "Whether to create the NAT Gateway and private route table"
+
+========================================
+ TASK 3 KEYWORD SEARCH
+========================================
+infrastructure/environments/local/terraform.tfstate.backup:188:            "policy": "{\"Statement\":[{\"Action\":[\"glue:*\"],\"Effect\":\"Allow\",\"Resource\":\"*\"},{\"Action\":[\"ec2:CreateNetworkInterface\",\"ec2:DeleteNetworkInterface\",\"ec2:DescribeNetworkInterfaces\",\"ec2:DescribeSubnets\",\"ec2:DescribeSecurityGroups\",\"ec2:DescribeVpcs\",\"ec2:CreateTags\",\"ec2:DeleteTags\"],\"Effect\":\"Allow\",\"Resource\":\"*\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:s3:::northstar-local-data-000000000000/raw/*\",\"arn:aws:s3:::northstar-local-data-000000000000/processed/*\",\"arn:aws:s3:::northstar-local-data-000000000000/features/*\"]},{\"Action\":[\"s3:ListBucket\"],\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"raw/*\",\"processed/*\",\"features/*\"]}},\"Effect\":\"Allow\",\"Resource\":\"arn:aws:s3:::northstar-local-data-000000000000\"},{\"Action\":[\"s3:GetObject\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:s3:::northstar-local-data-000000000000/artifacts/glue/*\"},{\"Action\":[\"s3:ListBucket\"],\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"artifacts/glue/*\"]}},\"Effect\":\"Allow\",\"Resource\":\"arn:aws:s3:::northstar-local-data-000000000000\"},{\"Action\":[\"sagemaker:PutRecord\",\"sagemaker:CreateFeatureGroup\",\"sagemaker:DescribeFeatureGroup\"],\"Effect\":\"Allow\",\"Resource\":\"*\"},{\"Action\":[\"logs:CreateLogGroup\",\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Effect\":\"Allow\",\"Resource\":\"*\"}],\"Version\":\"2012-10-17\"}",
+infrastructure/modules/iam/main.tf:176:          "sagemaker:PutRecord",
+infrastructure/modules/iam/main.tf:177:          "sagemaker:CreateFeatureGroup",
+glue-scripts/feature_engineer.py:2:Glue ETL: processed/customers/ -> features/customers/ + SageMaker Feature Store
+glue-scripts/feature_engineer.py:28:  --feature_group_name SageMaker Feature Group to ingest into
+glue-scripts/feature_engineer.py:29:  --region             AWS region for the Feature Store runtime client
+glue-scripts/feature_engineer.py:334:def ingest_to_feature_store(rows, feature_group_name, region, event_time):
+glue-scripts/feature_engineer.py:335:    """PutRecord each customer into the online store.
+glue-scripts/feature_engineer.py:342:        "sagemaker-featurestore-runtime",
+glue-scripts/feature_engineer.py:382:            FeatureGroupName=feature_group_name,
+glue-scripts/feature_engineer.py:398:            "feature_group_name",
+glue-scripts/feature_engineer.py:554:    ingested = ingest_to_feature_store(
+glue-scripts/feature_engineer.py:556:        args["feature_group_name"],
+glue-scripts/feature_engineer.py:563:        f"{args['feature_group_name']} at event_time {event_time}"
+docs/lab2-extend-output.txt:108:                          [32m+[0m[0m "sagemaker:PutRecord",
+docs/lab2-extend-output.txt:109:                          [32m+[0m[0m "sagemaker:CreateFeatureGroup",
+
+========================================
+ GIT STATUS
+========================================
+?? task3-inspection.txt
+
