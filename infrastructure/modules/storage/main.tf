@@ -58,8 +58,9 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
 resource "aws_s3_object" "prefixes" {
   for_each = toset(var.prefixes)
 
-  bucket = aws_s3_bucket.data.id
-  key    = each.value
+  bucket  = aws_s3_bucket.data.id
+  key     = each.value
+  content = ""
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "this" {

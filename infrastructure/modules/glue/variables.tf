@@ -32,3 +32,7 @@ variable "aws_region" {
   description = "AWS region where the Glue job runs"
   type        = string
 }
+variable "transform_script_path" {
+  description = "Local path to the transform Glue script"
+  type        = string
+}
