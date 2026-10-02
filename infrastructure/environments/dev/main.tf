@@ -54,6 +54,6 @@ module "glue" {
   data_engineer_role_arn       = module.iam.data_engineer_role_arn
   feature_group_name           = module.feature_store.feature_group_name
   feature_engineer_script_path = "${path.root}/../../../glue-scripts/feature_engineer.py"
-  transform_script_path = "${path.root}/../../../glue-scripts/transform.py"
+  transform_script_path        = "${path.root}/../../../glue-scripts/transform.py"
   aws_region                   = var.aws_region
 }
