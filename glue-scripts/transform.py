@@ -66,7 +66,12 @@ def cast_types(df):
     for column in df.columns:
         df = df.withColumn(
             column,
-            F.nullif(F.trim(F.col(column)), "")
+            F.when(
+                F.trim(F.col(column)) == "",
+                F.lit(None)
+            ).otherwise(
+                F.trim(F.col(column))
+            )
         )
 
     for column, data_type in SCHEMA.items():

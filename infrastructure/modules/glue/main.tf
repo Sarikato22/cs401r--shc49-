@@ -82,14 +82,14 @@ resource "aws_glue_job" "transform" {
     python_version  = "3"
   }
 
-  default_arguments = {
-    "--job-language"                     = "python"
-    "--enable-glue-datacatalog"          = "true"
-    "--enable-continuous-cloudwatch_log" = "true"
-    "--input_database"                   = "${var.project}_${var.environment}"
-    "--input_table"                      = "customers"
-    "--output_path"                      = "s3://${var.bucket_name}/processed/customers/"
-  }
+ default_arguments = {
+  "--job-language"                     = "python"
+  "--enable-glue-datacatalog"          = "true"
+  "--enable-continuous-cloudwatch_log" = "true"
+  "--database_name"                    = "${var.project}_${var.environment}"
+  "--table_name"                       = "customers"
+  "--output_path"                      = "s3://${var.bucket_name}/processed/customers/"
+}
 
   execution_property {
     max_concurrent_runs = 1
