@@ -1,0 +1,23 @@
+=== Bedrock Access Verification ===
+
+--- 1. Verification test output (Step 4) ---
+PASS  Titan embeddings        dim=1024
+PASS  Claude Haiku 4.5        'OK'
+
+--- 2. Quota check ---
+------------------------------------------------------------------------------------------------------------
+|                                             ListServiceQuotas                                            |
++-------------------------------------------------------------------------------------+-----------+--------+
+|  On-demand model inference requests per minute for Amazon Titan Text Embeddings V2  |  600.0    |  False |
+|  On-demand model inference tokens per minute for Amazon Titan Text Embeddings V2    |  300000.0 |  False |
++-------------------------------------------------------------------------------------+-----------+--------+
+
+--- 3. Reasoning ---
+Ran the quota check and both Titan Text Embeddings V2 limits were already
+non-zero (600 requests/min, 300k tokens/min), so I didn't have to request
+anything, that quota check was basically the whole job here. Those numbers
+are way more than Track B/C will actually need, embedding a corpus a few
+dozen times and running a few hundred Haiku calls for evaluation isn't
+going to get close to 600/min. If I ever did need more, these specific
+quotas aren't adjustable through Service Quotas anyway, so the move would
+be opening an AWS Support case instead of a normal increase request.

@@ -1,0 +1,1392 @@
+##### ./infrastructure/environments/dev/backend.tf
+# Task B3 - Remote State.
+#
+# Copy this file to backend.tf. scripts/bootstrap-state.sh creates the state
+# bucket and lock table and replaces YOUR_ACCOUNT_ID below with your real
+# account ID (it also copies this file to backend.tf for you if you have not).
+# The bucket must exist BEFORE terraform init: a backend cannot bootstrap the
+# bucket that stores its own state.
+
+terraform {
+  backend "s3" {
+    bucket         = "northstar-tfstate-716528268494"
+    key            = "dev/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "northstar-tfstate-lock"
+  }
+}
+
+##### ./infrastructure/environments/dev/main.tf
+# ── environments/dev ─────────────────────────────────────────────────────────
+# Wire the four modules together here. Each module call passes var.project and
+# var.environment down; nothing in modules/ hardcodes a name.
+#
+# Uncomment each block as you implement the module it calls.
+
+module "vpc" {
+  source              = "../../modules/vpc"
+  project             = var.project
+  environment         = var.environment
+  vpc_cidr            = var.vpc_cidr
+  public_subnet_cidr  = var.public_subnet_cidr
+  availability_zone   = var.availability_zone
+  private_subnet_cidr = var.private_subnet_cidr
+  enable_nat_gateway  = true
+}
+
+module "storage" {
+  source                 = "../../modules/storage"
+  project                = var.project
+  environment            = var.environment
+  enable_lifecycle_rules = true
+}
+
+module "iam" {
+  source      = "../../modules/iam"
+  project     = var.project
+  environment = var.environment
+}
+
+module "sagemaker" {
+  source             = "../../modules/sagemaker"
+  project            = var.project
+  environment        = var.environment
+  vpc_id             = module.vpc.vpc_id
+  subnet_ids         = [module.vpc.private_subnet_id]
+  security_group_ids = [module.vpc.security_group_id]
+  execution_role_arn = module.iam.ml_engineer_role_arn
+  instance_type      = var.sagemaker_instance_type
+}
+
+module "feature_store" {
+  source                 = "../../modules/feature_store"
+  project                = var.project
+  environment            = var.environment
+  bucket_name            = module.storage.bucket_name
+  data_engineer_role_arn = module.iam.data_engineer_role_arn
+}
+module "glue" {
+  source                       = "../../modules/glue"
+  project                      = var.project
+  environment                  = var.environment
+  bucket_name                  = module.storage.bucket_name
+  data_engineer_role_arn       = module.iam.data_engineer_role_arn
+  feature_group_name           = module.feature_store.feature_group_name
+  feature_engineer_script_path = "${path.root}/../../../glue-scripts/feature_engineer.py"
+  transform_script_path        = "${path.root}/../../../glue-scripts/transform.py"
+  aws_region                   = var.aws_region
+}
+##### ./infrastructure/environments/dev/outputs.tf
+# Surface what later labs need. Lab 2 reads these from `terraform output`,
+# and scripts/verify-lab1.sh reads ALL FIVE of them with `terraform output
+# -raw`, so every one must exist (uncommented and wired) before you run it.
+
+output "vpc_id" {
+  description = "ID of the VPC"
+  value       = module.vpc.vpc_id
+}
+
+output "public_subnet_id" {
+  description = "ID of the public subnet"
+  value       = module.vpc.public_subnet_id
+}
+
+output "s3_bucket_name" {
+  description = "Name of the data bucket"
+  value       = module.storage.bucket_name
+}
+
+output "ml_engineer_role_arn" {
+  description = "ARN of the MLEngineer role"
+  value       = module.iam.ml_engineer_role_arn
+}
+
+output "sagemaker_domain_id" {
+  description = "ID of the SageMaker Domain"
+  value       = module.sagemaker.domain_id
+}
+
+output "data_engineer_role_arn" {
+  value = module.iam.data_engineer_role_arn
+}
+
+output "feature_group_name" {
+  value = module.feature_store.feature_group_name
+}
+
+output "feature_group_arn" {
+  value = module.feature_store.feature_group_arn
+}
+
+output "feature_engineer_job_name" {
+  value = module.glue.feature_engineer_job_name
+}
+##### ./infrastructure/environments/dev/variables.tf
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+  default     = "northstar"
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+  default     = "dev"
+}
+
+variable "aws_region" {
+  description = "AWS region for all resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidr" {
+  description = "CIDR block for the public subnet"
+  type        = string
+  default     = "10.0.100.0/24"
+}
+
+variable "availability_zone" {
+  description = "Availability Zone for the public subnet"
+  type        = string
+  default     = "us-east-1a"
+}
+
+variable "sagemaker_instance_type" {
+  description = "Default kernel instance type for SageMaker Studio apps"
+  type        = string
+  default     = "ml.t3.medium"
+}
+
+variable "private_subnet_cidr" {
+  description = "CIDR block for the private subnet"
+  type        = string
+  default     = "10.0.1.0/24"
+}
+##### ./infrastructure/environments/dev/versions.tf
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = var.project
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
+}
+
+##### ./infrastructure/environments/local/main.tf
+# ── environments/local ───────────────────────────────────────────────────────
+# Calls the same modules as environments/dev. The sagemaker module is omitted
+# on purpose: SageMaker is not in LocalStack Community.
+#
+# These calls are live, not commented out, so `make local-validate` works the
+# moment your vpc, storage, and iam modules are implemented. Until then,
+# terraform validate still passes — an empty module is a valid module.
+
+module "vpc" {
+  source              = "../../modules/vpc"
+  project             = var.project
+  environment         = var.environment
+  enable_nat_gateway  = false
+}
+
+module "storage" {
+  source                 = "../../modules/storage"
+  project                = var.project
+  environment            = var.environment
+  enable_lifecycle_rules = false
+}
+
+module "iam" {
+  source      = "../../modules/iam"
+  project     = var.project
+  environment = var.environment
+}
+
+##### ./infrastructure/environments/local/outputs.tf
+# Uncomment once the matching module outputs exist. Mirrors environments/dev.
+
+# output "vpc_id" {
+#   description = "ID of the VPC"
+#   value       = module.vpc.vpc_id
+# }
+
+# output "public_subnet_id" {
+#   description = "ID of the public subnet"
+#   value       = module.vpc.public_subnet_id
+# }
+
+# output "s3_bucket_name" {
+#   description = "Name of the data bucket"
+#   value       = module.storage.bucket_name
+# }
+
+# output "ml_engineer_role_arn" {
+#   description = "ARN of the MLEngineer role"
+#   value       = module.iam.ml_engineer_role_arn
+# }
+
+##### ./infrastructure/environments/local/variables.tf
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+  default     = "northstar"
+}
+
+variable "environment" {
+  description = "Deployment environment — fixed to local so names never collide with dev"
+  type        = string
+  default     = "local"
+}
+
+variable "aws_region" {
+  description = "Region LocalStack emulates; must match awslocal's default"
+  type        = string
+  default     = "us-east-1"
+}
+
+##### ./infrastructure/environments/local/versions.tf
+# ── environments/local ───────────────────────────────────────────────────────
+# Same modules as environments/dev, pointed at LocalStack instead of AWS.
+# Nothing here costs money. Used only by Task B5 (make local-validate).
+#
+# Do not add a backend block: local state is fine for a throwaway emulator.
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  # LocalStack accepts any credentials; these keep the provider from reading
+  # your real ~/.aws profile.
+  access_key = "test"
+  secret_key = "test"
+
+  # Skip the calls that only make sense against real AWS.
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+  skip_region_validation      = true
+  s3_use_path_style           = true
+
+  endpoints {
+    ec2 = "http://localhost:4566"
+    iam = "http://localhost:4566"
+    s3  = "http://localhost:4566"
+    sts = "http://localhost:4566"
+  }
+
+  default_tags {
+    tags = {
+      Project     = var.project
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
+}
+
+##### ./infrastructure/modules/feature_store/main.tf
+
+resource "aws_sagemaker_feature_group" "customer_features" {
+  feature_group_name             = "${var.project}-${var.environment}-customer-features"
+  record_identifier_feature_name = "customer_id"
+  event_time_feature_name        = "event_time"
+  role_arn                       = var.data_engineer_role_arn
+
+  description = "Northstar customer RFM and churn features"
+
+  feature_definition {
+    feature_name = "customer_id"
+    feature_type = "String"
+  }
+
+  feature_definition {
+    feature_name = "event_time"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "days_since_last_purchase"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "customer_tenure_days"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "purchase_frequency_30d"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "purchase_frequency_90d"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "purchase_frequency_180d"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "avg_order_value"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "total_spend_90d"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "total_lifetime_value"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "avg_basket_size_6m"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "category_diversity_score"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "online_to_store_ratio"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "loyalty_tier"
+    feature_type = "String"
+  }
+
+  feature_definition {
+    feature_name = "churn_risk_score"
+    feature_type = "Fractional"
+  }
+
+  feature_definition {
+    feature_name = "churn_label"
+    feature_type = "Integral"
+  }
+
+  online_store_config {
+    enable_online_store = true
+  }
+
+  offline_store_config {
+    disable_glue_table_creation = false
+
+    s3_storage_config {
+      s3_uri = "s3://${var.bucket_name}/features/offline-store/"
+    }
+
+    data_catalog_config {
+      catalog     = "AwsDataCatalog"
+      database    = "${var.project}_${var.environment}_features"
+      table_name  = "customer_features"
+    }
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-customer-features"
+  }
+}
+##### ./infrastructure/modules/feature_store/outputs.tf
+output "feature_group_name" {
+  description = "Customer Feature Store feature group name"
+  value       = aws_sagemaker_feature_group.customer_features.feature_group_name
+}
+
+output "feature_group_arn" {
+  description = "Customer Feature Store feature group ARN"
+  value       = aws_sagemaker_feature_group.customer_features.arn
+}
+##### ./infrastructure/modules/feature_store/variables.tf
+variable "project" {
+  description = "Project name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment"
+  type        = string
+}
+
+variable "bucket_name" {
+  description = "S3 data bucket containing the Feature Store offline path"
+  type        = string
+}
+
+variable "data_engineer_role_arn" {
+  description = "IAM role ARN used by SageMaker Feature Store"
+  type        = string
+}
+##### ./infrastructure/modules/glue/main.tf
+resource "aws_glue_job" "feature_engineer" {
+  name     = "${var.project}-${var.environment}-feature-engineer"
+  role_arn = var.data_engineer_role_arn
+
+  depends_on = [aws_s3_object.feature_engineer_script]
+
+  glue_version = "4.0"
+
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  timeout           = 30
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.bucket_name}/artifacts/glue/feature_engineer.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--enable-glue-datacatalog"          = "true"
+    "--enable-continuous-cloudwatch_log" = "true"
+    "--input_path"                       = "s3://${var.bucket_name}/processed/customers/"
+    "--output_path"                      = "s3://${var.bucket_name}/features/customers/"
+    "--feature_group_name"               = var.feature_group_name
+    "--region"                           = var.aws_region
+  }
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-feature-engineer"
+  }
+}
+
+resource "aws_s3_object" "feature_engineer_script" {
+  bucket = var.bucket_name
+  key    = "artifacts/glue/feature_engineer.py"
+  source = var.feature_engineer_script_path
+  etag   = filemd5(var.feature_engineer_script_path)
+}
+resource "aws_glue_catalog_database" "this" {
+  name = "${var.project}_${var.environment}"
+}
+
+resource "aws_glue_crawler" "raw" {
+  name          = "${var.project}-${var.environment}-raw-crawler"
+  role          = var.data_engineer_role_arn
+  database_name = aws_glue_catalog_database.this.name
+
+  s3_target {
+    path = "s3://${var.bucket_name}/raw/customers/"
+  }
+}
+
+resource "aws_s3_object" "transform_script" {
+  bucket = var.bucket_name
+  key    = "artifacts/glue/transform.py"
+  source = var.transform_script_path
+  etag   = filemd5(var.transform_script_path)
+}
+
+resource "aws_glue_job" "transform" {
+  name     = "${var.project}-${var.environment}-transform"
+  role_arn = var.data_engineer_role_arn
+
+  depends_on = [
+    aws_s3_object.transform_script
+  ]
+
+  glue_version = "4.0"
+
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  timeout           = 30
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.bucket_name}/artifacts/glue/transform.py"
+    python_version  = "3"
+  }
+
+ default_arguments = {
+  "--job-language"                     = "python"
+  "--enable-glue-datacatalog"          = "true"
+  "--enable-continuous-cloudwatch_log" = "true"
+  "--database_name"                    = "${var.project}_${var.environment}"
+  "--table_name"                       = "customers"
+  "--output_path"                      = "s3://${var.bucket_name}/processed/customers/"
+}
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-transform"
+  }
+}
+##### ./infrastructure/modules/glue/outputs.tf
+output "feature_engineer_job_name" {
+  description = "Name of the customer feature engineering Glue job"
+  value       = aws_glue_job.feature_engineer.name
+}
+
+output "feature_engineer_job_arn" {
+  description = "ARN of the customer feature engineering Glue job"
+  value       = aws_glue_job.feature_engineer.arn
+}
+##### ./infrastructure/modules/glue/variables.tf
+variable "project" {
+  description = "Project name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment"
+  type        = string
+}
+
+variable "bucket_name" {
+  description = "S3 data bucket used by the Glue job"
+  type        = string
+}
+
+variable "data_engineer_role_arn" {
+  description = "IAM role ARN assumed by the Glue job"
+  type        = string
+}
+
+variable "feature_group_name" {
+  description = "SageMaker Feature Group receiving the generated features"
+  type        = string
+}
+
+variable "feature_engineer_script_path" {
+  description = "Local path to the feature engineering Glue script"
+  type        = string
+}
+
+variable "aws_region" {
+  description = "AWS region where the Glue job runs"
+  type        = string
+}
+variable "transform_script_path" {
+  description = "Local path to the transform Glue script"
+  type        = string
+}
+
+##### ./infrastructure/modules/iam/main.tf
+# ── modules/iam ──────────────────────────────────────────────────────────────
+# Required resources (Task B1). Exactly one of each:
+#
+#   aws_iam_role                     MLEngineer, trusted by sagemaker.amazonaws.com
+#   aws_iam_policy
+#   aws_iam_role_policy_attachment
+#
+# Least privilege is graded in later labs, so start narrow: grant only the S3
+# prefixes and SageMaker actions this role actually needs. A wildcard policy
+# here will cost you points in Lab 2.
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  data_bucket_name = "${var.project}-${var.environment}-data-${data.aws_caller_identity.current.account_id}"
+}
+
+#MLEngineer 
+
+data "aws_iam_policy_document" "assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["sagemaker.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "ml_engineer" {
+  name               = "${var.project}-${var.environment}-MLEngineer"
+  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+
+  tags = {
+    Name = "${var.project}-${var.environment}-MLEngineer"
+  }
+}
+
+resource "aws_iam_policy" "ml_engineer" {
+  name = "${var.project}-${var.environment}-MLEngineer-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "sagemaker:CreateTrainingJob"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ml_engineer" {
+  role       = aws_iam_role.ml_engineer.name
+  policy_arn = aws_iam_policy.ml_engineer.arn
+}
+
+# Data Engineer
+
+data "aws_iam_policy_document" "data_engineer_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type = "Service"
+      identifiers = [
+        "glue.amazonaws.com",
+        "lambda.amazonaws.com",
+        "sagemaker.amazonaws.com"
+      ]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "data_engineer" {
+  name               = "${var.project}-${var.environment}-DataEngineer"
+  assume_role_policy = data.aws_iam_policy_document.data_engineer_assume_role.json
+
+  tags = {
+    Name = "${var.project}-${var.environment}-DataEngineer"
+  }
+}
+
+resource "aws_iam_policy" "data_engineer" {
+  name = "${var.project}-${var.environment}-DataEngineer-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:*"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DeleteNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeVpcs",
+          "ec2:CreateTags",
+          "ec2:DeleteTags"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = [
+          "arn:aws:s3:::${local.data_bucket_name}/raw/*",
+          "arn:aws:s3:::${local.data_bucket_name}/processed/*",
+          "arn:aws:s3:::${local.data_bucket_name}/features/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObjectAcl"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}/features/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetBucketAcl"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "raw/*",
+              "processed/*",
+              "features/*"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}/artifacts/glue/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "artifacts/glue/*"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sagemaker:PutRecord",
+          "sagemaker:CreateFeatureGroup",
+          "sagemaker:DescribeFeatureGroup"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "data_engineer" {
+  role       = aws_iam_role.data_engineer.name
+  policy_arn = aws_iam_policy.data_engineer.arn
+}
+
+# Model Monitor
+
+data "aws_iam_policy_document" "model_monitor_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["sagemaker.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "model_monitor" {
+  name               = "${var.project}-${var.environment}-ModelMonitor"
+  assume_role_policy = data.aws_iam_policy_document.model_monitor_assume_role.json
+
+  tags = {
+    Name = "${var.project}-${var.environment}-ModelMonitor"
+  }
+}
+
+resource "aws_iam_policy" "model_monitor" {
+  name = "${var.project}-${var.environment}-ModelMonitor-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData",
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DescribeAlarms"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sagemaker:ListProcessingJobs",
+          "sagemaker:DescribeProcessingJob"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}/artifacts/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = "arn:aws:s3:::${local.data_bucket_name}"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "artifacts/*"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "model_monitor" {
+  role       = aws_iam_role.model_monitor.name
+  policy_arn = aws_iam_policy.model_monitor.arn
+}
+
+##### ./infrastructure/modules/iam/outputs.tf
+output "ml_engineer_role_arn" {
+  description = "ARN of the MLEngineer role — later labs pass this to SageMaker"
+  value       = aws_iam_role.ml_engineer.arn
+}
+
+output "data_engineer_role_arn" {
+  description = "ARN of the DataEngineer role"
+  value       = aws_iam_role.data_engineer.arn
+}
+
+output "model_monitor_role_arn" {
+  description = "ARN of the ModelMonitor role"
+  value       = aws_iam_role.model_monitor.arn
+}
+
+##### ./infrastructure/modules/iam/variables.tf
+# Every variable needs a description — Task B1 grades this.
+
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+##### ./infrastructure/modules/sagemaker/main.tf
+# ── modules/sagemaker ────────────────────────────────────────────────────────
+# Required resources (Task B1). Only these belong in this module:
+#
+#   aws_sagemaker_domain
+#   aws_sagemaker_user_profile
+#
+# A brand-new AWS account has no service-linked role for Studio, and the
+# Domain fails to create with a service-linked role error. Fix it once in the
+# console (IAM -> Roles -> Create Role -> AWS Service -> SageMaker -> SageMaker
+# Studio) and re-apply. See the New Account Bootstrap note in the lab.
+#
+# The Domain is also the slowest resource here by a wide margin -- several
+# minutes to create and to delete. Factor that into your apply/destroy timings
+# for Task B2.
+
+resource "aws_sagemaker_domain" "this" {
+  domain_name = "${var.project}-${var.environment}-domain"
+  auth_mode   = "IAM"
+  vpc_id      = var.vpc_id
+  subnet_ids  = var.subnet_ids
+
+  app_network_access_type = "VpcOnly"
+
+  default_user_settings {
+    execution_role = var.execution_role_arn
+  }
+
+  retention_policy {
+    home_efs_file_system = "Delete"
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-domain"
+  }
+}
+
+resource "aws_sagemaker_user_profile" "this" {
+  domain_id         = aws_sagemaker_domain.this.id
+  user_profile_name = "${var.project}-${var.environment}-user"
+
+  user_settings {
+    execution_role = var.execution_role_arn
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-user"
+  }
+}
+
+##### ./infrastructure/modules/sagemaker/outputs.tf
+output "domain_id" {
+  description = "ID of the SageMaker Domain"
+  value       = aws_sagemaker_domain.this.id
+}
+
+##### ./infrastructure/modules/sagemaker/variables.tf
+# Every variable needs a description — Task B1 grades this.
+
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+variable "vpc_id" {
+  description = "VPC the SageMaker Domain attaches to"
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "Subnets the SageMaker Domain may use"
+  type        = list(string)
+}
+variable "security_group_ids" {
+  description = "Security groups to associate with the SageMaker Domain"
+  type        = list(string)
+}
+
+variable "instance_type" {
+  description = "Default instance type for SageMaker Studio applications"
+  type        = string
+  default     = "ml.t3.medium"
+}
+variable "execution_role_arn" {
+  description = "ARN of the IAM role used by SageMaker"
+  type        = string
+}
+##### ./infrastructure/modules/storage/main.tf
+# ── modules/storage ──────────────────────────────────────────────────────────
+# Required resources (Task B1). Only these belong in this module:
+#
+#   aws_s3_bucket
+#   aws_s3_bucket_public_access_block
+#   aws_s3_bucket_versioning
+#   aws_s3_bucket_server_side_encryption_configuration
+#   aws_s3_object  x4                 the raw/ processed/ features/ artifacts/ prefixes
+#
+# ONE bucket with four prefixes, not four buckets. Later labs derive the name
+# as ${project}-${environment}-data-${account_id}, so keep that shape.
+#
+# The four aws_s3_object resources create the prefixes. S3 has no real
+# directories; an empty object with a trailing slash is how a prefix is made
+# to exist before anything is written to it.
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  bucket_name = "${var.project}-${var.environment}-data-${data.aws_caller_identity.current.account_id}"
+}
+
+resource "aws_s3_bucket" "data" {
+  bucket = local.bucket_name
+
+  tags = {
+    Name = "${var.project}-${var.environment}-data"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "this" {
+  bucket = aws_s3_bucket.data.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "this" {
+  bucket = aws_s3_bucket.data.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_object" "prefixes" {
+  for_each = toset(var.prefixes)
+
+  bucket  = aws_s3_bucket.data.id
+  key     = each.value
+  content = ""
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "this" {
+  count  = var.enable_lifecycle_rules ? 1 : 0
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "expire-raw-data"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw/"
+    }
+
+    expiration {
+      days = 90
+    }
+  }
+
+  rule {
+    id     = "expire-raw-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "raw/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
+  rule {
+    id     = "expire-processed-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "processed/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
+  rule {
+    id     = "expire-feature-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "features/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 60
+    }
+  }
+
+  rule {
+    id     = "expire-datacapture"
+    status = "Enabled"
+
+    filter {
+      prefix = "datacapture/"
+    }
+
+    expiration {
+      days = 7
+    }
+  }
+}
+
+##### ./infrastructure/modules/storage/outputs.tf
+output "bucket_name" {
+  description = "Name of the data bucket"
+  value       = aws_s3_bucket.data.id
+}
+
+output "bucket_arn" {
+  description = "ARN of the data bucket"
+  value       = aws_s3_bucket.data.arn
+}
+
+##### ./infrastructure/modules/storage/variables.tf
+# Every variable needs a description — Task B1 grades this.
+
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+variable "prefixes" {
+  description = "Top-level S3 prefixes to create in the data bucket"
+  type        = list(string)
+  default     = ["raw/", "processed/", "features/", "artifacts/"]
+}
+variable "enable_lifecycle_rules" {
+  description = "Whether to create the S3 bucket lifecycle rules"
+  type        = bool
+  default     = true
+}
+
+##### ./infrastructure/modules/vpc/main.tf
+resource "aws_vpc" "this" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.project}-${var.environment}-vpc"
+  }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.public_subnet_cidr
+  availability_zone       = var.availability_zone
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project}-${var.environment}-public-subnet"
+  }
+}
+
+resource "aws_subnet" "private" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.private_subnet_cidr
+  availability_zone       = var.availability_zone
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "${var.project}-${var.environment}-private-1"
+  }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.project}-${var.environment}-igw"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_eip" "nat" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project}-${var.environment}-nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "this" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  allocation_id = aws_eip.nat[0].id
+  subnet_id     = aws_subnet.public.id
+
+  tags = {
+    Name = "${var.project}-${var.environment}-nat"
+  }
+
+  depends_on = [aws_internet_gateway.this]
+}
+
+resource "aws_route_table" "private" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this[0].id
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-private-rt"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.private[0].id
+}
+
+resource "aws_security_group" "this" {
+  name        = "${var.project}-${var.environment}-sg"
+  description = "Security group for ${var.project}-${var.environment}"
+  vpc_id      = aws_vpc.this.id
+
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project}-${var.environment}-sg"
+  }
+}
+
+##### ./infrastructure/modules/vpc/outputs.tf
+# Downstream modules and environments/dev/main.tf consume these.
+# Uncomment and wire up as you implement each resource.
+
+output "vpc_id" {
+  description = "ID of the VPC"
+  value       = aws_vpc.this.id
+}
+
+output "public_subnet_id" {
+  description = "ID of the public subnet"
+  value       = aws_subnet.public.id
+}
+
+output "security_group_id" {
+  description = "ID of the default security group"
+  value       = aws_security_group.this.id
+}
+output "private_subnet_id" {
+  description = "ID of the private subnet"
+  value       = aws_subnet.private.id
+}
+
+##### ./infrastructure/modules/vpc/variables.tf
+# Every variable needs a description — Task B1 grades this.
+variable "project" {
+  description = "Project name, used as the first element of every resource name"
+  type        = string
+}
+
+variable "environment" {
+  description = "Deployment environment (dev, staging, prod)"
+  type        = string
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidr" {
+  description = "CIDR block for the public subnet"
+  type        = string
+  default     = "10.0.100.0/24"
+}
+
+variable "private_subnet_cidr" {
+  description = "CIDR block for the private subnet"
+  type        = string
+  default     = "10.0.1.0/24"
+}
+
+variable "availability_zone" {
+  description = "Availability Zone for the public and private subnets"
+  type        = string
+  default     = "us-east-1a"
+}
+
+variable "enable_nat_gateway" {
+  description = "Whether to create the NAT Gateway and private route table"
+  type        = bool
+  default     = true
+}
+
+#testing
