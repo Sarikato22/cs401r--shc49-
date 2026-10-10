@@ -1,0 +1,93 @@
+{
+  "feature_columns": [
+    "days_since_last_purchase",
+    "customer_tenure_days",
+    "purchase_frequency_30d",
+    "purchase_frequency_90d",
+    "purchase_frequency_180d",
+    "avg_order_value",
+    "total_spend_90d",
+    "total_lifetime_value",
+    "avg_basket_size_6m",
+    "category_diversity_score",
+    "online_to_store_ratio"
+  ],
+  "label_column": "churn_label",
+  "hyperparameters": {
+    "max_depth": 8,
+    "eta": 0.05,
+    "num_round": 300,
+    "min_child_weight": 5,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "scale_pos_weight": 3.544805194805195
+  },
+  "evaluation_metrics": {
+    "auc_roc": 0.7796,
+    "precision_top10": 0.73,
+    "recall_top10": 0.3318,
+    "auc_vs_baseline": 0.0568,
+    "baseline_auc": 0.7229,
+    "lift_ci_low": 0.0361,
+    "lift_ci_high": 0.0759,
+    "positive_rate_val": 0.22,
+    "n_val_samples": 3000,
+    "eval_timestamp": "2026-10-10T23:09:13.082024+00:00",
+    "evaluation_passed": true,
+    "evaluation_failures": [],
+    "slice_evaluation": {
+      "Bronze": {
+        "n": 1071,
+        "auc_roc": 0.7543,
+        "recall_top10": 0.2853,
+        "aggregate_recall_top10": 0.3318,
+        "below_aggregate_by_10pp": false,
+        "too_small_for_reliable_claim": false,
+        "auc_undefined_single_class": false
+      },
+      "Gold": {
+        "n": 483,
+        "auc_roc": 0.74,
+        "recall_top10": 0.2885,
+        "aggregate_recall_top10": 0.3318,
+        "below_aggregate_by_10pp": false,
+        "too_small_for_reliable_claim": false,
+        "auc_undefined_single_class": false
+      },
+      "Platinum": {
+        "n": 307,
+        "auc_roc": 0.8828,
+        "recall_top10": 0.5714,
+        "aggregate_recall_top10": 0.3318,
+        "below_aggregate_by_10pp": false,
+        "too_small_for_reliable_claim": false,
+        "auc_undefined_single_class": false
+      },
+      "Silver": {
+        "n": 1139,
+        "auc_roc": 0.7116,
+        "recall_top10": 0.2699,
+        "aggregate_recall_top10": 0.3318,
+        "below_aggregate_by_10pp": false,
+        "too_small_for_reliable_claim": false,
+        "auc_undefined_single_class": false
+      }
+    },
+    "confusion_matrix_threshold": 0.5,
+    "confusion_matrix_labels": [
+      "not_churn",
+      "churn"
+    ],
+    "confusion_matrix": [
+      [
+        1797,
+        543
+      ],
+      [
+        265,
+        395
+      ]
+    ]
+  },
+  "training_date": "2026-10-10T23:09:14.211506+00:00"
+}
